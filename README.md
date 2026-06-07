@@ -198,7 +198,7 @@ Phase 3 — Community-Driven
 
 ## Contributing
 
-We welcome contributions across all Protestant traditions and languages.
+We welcome contributions across all Protestant traditions and languages. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide.
 
 - **Dataset examples:** open an issue with theological Q&A in any tradition and language. Include the confessional reference.
 - **Doctrinal corrections:** open an issue with the problematic example and the correct reference.
@@ -223,7 +223,7 @@ We welcome contributions across all Protestant traditions and languages.
 
 ## License
 
-Apache 2.0. Free use including commercial; attribution required.
+Apache 2.0 — see [`LICENSE`](LICENSE). Free use including commercial; attribution required.
 
 ---
 
