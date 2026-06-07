@@ -1,0 +1,39 @@
+# requirements.txt — OpenScriptura v0.1
+# Generated: 2026-06-07 | Python 3.11 | CUDA 12.4
+# Install: pip install -r requirements.txt --break-system-packages
+
+# Core ML
+torch==2.5.1+cu124
+transformers==4.51.0
+trl==0.12.0
+peft==0.13.0
+bitsandbytes==0.44.1
+unsloth==2025.3.0
+
+# Data
+datasets==3.2.0
+sentencepiece==0.2.0
+tokenizers==0.21.0
+
+# Evaluation / API
+openai==1.58.0
+httpx==0.27.0
+tenacity==9.0.0
+
+# Utilities
+jsonlines==4.0.0
+tqdm==4.67.0
+python-dotenv==1.0.1
+pyyaml==6.0.2
+numpy==2.2.0
+pandas==2.2.3
+scipy==1.14.1              # z-tests, norm.ppf for Wilson CI (Phase 4)
+
+# Export
+llama-cpp-python==0.3.4
+huggingface_hub==0.27.0
+
+# Dev
+pytest==8.3.4
+black==24.10.0
+ruff==0.9.0

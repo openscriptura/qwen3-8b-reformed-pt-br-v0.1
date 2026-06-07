@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"C:\\\\tmp\\\\openScriptura\" -Recurse -Depth 3 | Where-Object {$_.PSIsContainer -eq $false} | Select-Object -ExpandProperty FullName | head -80)",
+      "Bash(git -C /tmp/openScriptura status)"
+    ]
+  }
+}
