@@ -450,7 +450,7 @@ def main() -> None:
         base_url   = _get_env("OPENROUTER_BASE_URL")
         model      = args.model or _get_env("OPENROUTER_MODEL_BASELINE")
         judge      = _get_env("OPENROUTER_MODEL_JUDGE")
-        cost_limit = float(os.getenv("COST_LIMIT_USD_PHASE0", "2.00"))
+        cost_limit = float(os.getenv("COST_LIMIT_USD_PHASE0", "5.00"))
     except EnvironmentError as exc:
         log.error("%s", exc)
         sys.exit(1)

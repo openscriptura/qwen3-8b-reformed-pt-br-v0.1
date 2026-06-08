@@ -27,7 +27,7 @@ Environment:
   OPENROUTER_API_KEY  — required (judge calls)
   OPENROUTER_BASE_URL — required
   OPENROUTER_MODEL_JUDGE — required (same judge as Phase 0)
-  COST_LIMIT_USD_PHASE4 — optional, default $2.00
+  COST_LIMIT_USD_PHASE4 — optional, default $5.00
 """
 
 import argparse
@@ -516,7 +516,7 @@ Examples:
         api_key    = _get_env("OPENROUTER_API_KEY")
         base_url   = _get_env("OPENROUTER_BASE_URL")
         judge      = _get_env("OPENROUTER_MODEL_JUDGE")
-        cost_limit = float(os.getenv("COST_LIMIT_USD_PHASE4", "2.00"))
+        cost_limit = float(os.getenv("COST_LIMIT_USD_PHASE4", "5.00"))
     except EnvironmentError as exc:
         log.error("%s", exc)
         sys.exit(1)
