@@ -21,7 +21,8 @@ CEFEAI comparability note:
 
 Environment:
   No API keys needed — runs entirely locally on GPU.
-  CUDA + bitsandbytes + flash-attn must be installed (see requirements.txt).
+  CUDA + bitsandbytes must be installed (see requirements.txt).
+  Attention: uses eager implementation — flash_attn not required.
 """
 
 import argparse
@@ -215,6 +216,12 @@ def build_sft_config(cfg: dict, resume: bool):
         # ── memory ─────────────────────────────────────────────────────────
         gradient_checkpointing=True,    # recompute activations → ~40% less VRAM
         gradient_checkpointing_kwargs={"use_reentrant": False},
+        # ── labels ─────────────────────────────────────────────────────────
+        # PeftModelForCausalLM hides the base model's argument signature.
+        # Explicitly setting label_names=[] tells Trainer to derive loss from
+        # the model's return value (correct for CausalLM) and silences the
+        # "No label_names provided" warning on every eval pass.
+        label_names=[],
         # ── precision + reporting ───────────────────────────────────────────
         bf16=True,
         report_to="none",               # no wandb/tensorboard by default
@@ -396,16 +403,26 @@ def run_training(cfg: dict, resume: bool) -> None:
             log.info("  Resuming from: %s", checkpoint)
 
     log.info("Training started...")
-    trainer.train(resume_from_checkpoint=checkpoint)
+    try:
+        trainer.train(resume_from_checkpoint=checkpoint)
+    except Exception as exc:
+        # Catch end-of-training failures (e.g. load_best_model_at_end issues,
+        # OOM on final save) so we still persist results and the adapter.
+        log.error("trainer.train() raised: %s — saving partial results.", exc)
+        raise
+    finally:
+        # Always save adapter + results, even if training raised an exception.
+        # Checkpoints from save_steps are already on disk; this captures the
+        # final state and writes the results.json for config comparison.
+        final_dir = output_dir / "final"
+        log.info("Saving adapter to %s...", final_dir)
+        try:
+            trainer.save_model(str(final_dir))
+            tokenizer.save_pretrained(str(final_dir))
+        except Exception as save_exc:
+            log.error("save_model failed: %s", save_exc)
+        _write_results(cfg, trainer)
 
-    # --- Save ---
-    final_dir = output_dir / "final"
-    log.info("Saving adapter to %s...", final_dir)
-    trainer.save_model(str(final_dir))
-    tokenizer.save_pretrained(str(final_dir))
-
-    # --- Results summary ---
-    _write_results(cfg, trainer)
     log.info("Experiment %s complete.", exp_id)
 
 
@@ -435,9 +452,10 @@ def _write_results(cfg: dict, trainer) -> None:
         "lora_alpha":           cfg["lora"]["lora_alpha"],
         "learning_rate":        cfg["training"]["learning_rate"],
         "num_epochs":           cfg["training"]["num_train_epochs"],
-        # Best combined eval_loss (primary selection metric)
-        "best_eval_loss":       best.get("eval_all_loss"),
-        "best_eval_step":       best.get("step"),
+        # Best combined eval_loss (primary selection metric).
+        # None if training crashed before the first eval at step eval_steps.
+        "best_eval_loss":       best.get("eval_all_loss"),   # float or None (valid JSON null)
+        "best_eval_step":       best.get("step"),            # int or None
         # Per-tier breakdown — catechism vs Spurgeon/Monergismo
         "best_eval_loss_by_tier": per_tier,
         # CEFEAI inference settings — stored for traceability, NOT used here
@@ -449,8 +467,10 @@ def _write_results(cfg: dict, trainer) -> None:
     out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     log.info("  Results written to %s", out)
-    log.info("  Best eval_loss (all)  : %.4f at step %s",
-             best.get("eval_all_loss", float("nan")), best.get("step", "?"))
+    best_loss = best.get("eval_all_loss")
+    log.info("  Best eval_loss (all)  : %s at step %s",
+             f"{best_loss:.4f}" if best_loss is not None else "N/A",
+             best.get("step", "?"))
     if per_tier.get("B") is not None:
         log.info("  Best eval_loss Tier B : %.4f", per_tier["B"])
     if per_tier.get("C") is not None:

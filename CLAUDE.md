@@ -203,6 +203,15 @@ the package flash_attn seems to be not installed.
 **Fix:** Changed all configs (`exp_a/b/c/d.yaml`) to `attn_implementation: "eager"` — always available, no build step.  
 **Note:** `eager` is ~10–15% slower but produces identical model weights. For Phase 3 on A100 where training time matters, you can optionally install: `pip install flash-attn --no-build-isolation` (~10 min build).
 
+### 9. `load_best_model_at_end: true` crashes at end of QLoRA training
+**Problem:** After all epochs complete, HuggingFace Trainer tries to reload the best checkpoint into the 4-bit quantized PEFT model. With `transformers==4.51.0` + `peft==0.13.0`, this can corrupt `model.config.use_cache` (reset to `True` from checkpoint, breaking the gradient-checkpointing state) and may raise errors during the final `save_model()` call. The entire training run completes successfully but the final save silently fails.  
+**Fix:** Set `load_best_model_at_end: false` in all configs. The adapter is saved manually in a `try/finally` block in `04_experiment.py`, so it's always persisted regardless of training outcome. Best checkpoint is selected by reading `results.json` after all 4 experiments complete.  
+**Also fixed:** `trainer.train()` is now wrapped in `try/finally` to guarantee `save_model()` and `_write_results()` are called even if training raises an exception.
+
+### 10. `metric_for_best_model: "eval_loss"` fails when eval_dataset is a dict
+**Problem:** When `eval_dataset` is passed as a dict `{"B": ..., "C": ..., "all": ...}`, HuggingFace Trainer names metrics `eval_B_loss`, `eval_C_loss`, `eval_all_loss`. There is no `eval_loss`. Training crashed at step 50 (first eval) with `KeyError: eval_loss not found in evaluation metrics`.  
+**Fix:** Changed `metric_for_best_model` from `"eval_loss"` to `"eval_all_loss"` in all 4 configs.
+
 ### 6. `nohup` required for long training runs
 Always launch training with `nohup ... &` so it survives SSH disconnection:
 ```bash

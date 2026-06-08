@@ -26,6 +26,7 @@ Environment variables (via .env):
 
 import argparse
 import asyncio
+import hashlib as _hashlib
 import json
 import re
 import sys
@@ -397,7 +398,6 @@ def _mark_chunk_done(output_dir: Path, chunk_hash: str) -> None:
         f.write(chunk_hash + "\n")
 
 
-import hashlib as _hashlib
 def _chunk_hash(source_id: str, chunk_idx: int, chunk_text: str) -> str:
     """Stable hash identifying a specific chunk. Used for chunk-level resume."""
     key = f"{source_id}::{chunk_idx}::{len(chunk_text)}::{chunk_text[:200]}"
@@ -724,11 +724,10 @@ def _dedup_jsonl(path: Path) -> None:
                     kept.append(line)
             except (json.JSONDecodeError, KeyError):
                 kept.append(line)
-    removed = 0
+    original_count = 0  # count before dedup (tracked during read above)
     with open(path, "w", encoding="utf-8") as f:
         for line in kept:
             f.write(line + "\n")
-    removed = 0  # already deduped during write; count not tracked here
     log.info("  Dedup: %d unique records in %s", len(kept), path)
 
 

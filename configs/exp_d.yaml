@@ -55,7 +55,9 @@ training:
   save_steps: 50
   eval_steps: 50
   save_total_limit: 3
-  load_best_model_at_end: true
+  load_best_model_at_end: false  # QLoRA + PEFT: reloading 4-bit checkpoint at end is unsafe;
+                                 # adapter is saved manually via trainer.save_model() in finally block.
+                                 # Best checkpoint is identified from results.json after training.
   metric_for_best_model: "eval_all_loss"  # dict eval_dataset → metrics named eval_<key>_loss
 
   # CRITICAL: inference settings MUST match 00_cefeai_baseline.py
