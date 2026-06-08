@@ -121,7 +121,7 @@ All training records use this shape. `content_hash()` hashes `messages + traditi
 - `sys.stdout.reconfigure(encoding="utf-8")` at top of every entry-point script (Windows/PowerShell UTF-8).
 - Paths resolved from `PROJECT_ROOT = Path(__file__).resolve().parent.parent`.
 - Every API-spending script: `OpenRouterClient` + `CostTracker` + `--dry-run` + `--resume` checkpoint.
-- **CEFEAI comparability lock:** `temperature=0.0, seed=42, enable_thinking=False` — inference only, never changed between Phase 0 and Phase 4. Training-side settings (LR, LoRA rank, batch size, data generation temperature) are orthogonal and do NOT affect comparability.
+- **CEFEAI comparability (protocol v2):** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512` — inference only. Comparability is now maintained by **running both sides under the same protocol** rather than by freezing one. Protocol v2 adds the canonical Reformed system prompt (`configs/system_prompt.txt`) to BOTH the Phase 0 baseline (`00_cefeai_baseline.py`, default; `--no-system-prompt` reproduces legacy v1) and the Phase 4 eval (`07_cefeai_eval.py`). The only difference between the two runs is the model weights. Shared judge prompts / Wilson CI / system prompt live in `scripts/utils/cefeai.py` so the two sides can never drift. Output files are tagged `sysprompt`/`noprompt`; `07` compares against the baseline matching its own mode. Training-side settings (LR, LoRA rank, batch size) are orthogonal.
 
 ### GPU Strategy
 
@@ -245,7 +245,17 @@ Verify the GPU is clear with `nvidia-smi` (0 MiB, "No running processes") before
 
 ### 14. Phase 4 system prompt vs CEFEAI comparability
 **Problem:** The Phase 0 baseline (`00_cefeai_baseline.py`) sent prompts with NO system message. The model is trained WITH a Reformed system prompt. If Phase 4 eval injects the system prompt, the delta vs baseline conflates fine-tuning with prompt injection — violating the comparability lock.
-**Fix:** `07_cefeai_eval.py` supports `--no-system-prompt` (strict baseline-comparable run) and warns loudly when the system prompt is on. Output filenames include the prompt mode (`sysprompt`/`noprompt`) so the two runs never share a JSONL. The canonical system prompt is read from `train.jsonl` (not retyped) to avoid distribution shift. **Always run both modes; the locked headline number is `--no-system-prompt`.**
+**Fix:** `07_cefeai_eval.py` supports `--no-system-prompt` (strict baseline-comparable run) and warns loudly when the system prompt is on. Output filenames include the prompt mode (`sysprompt`/`noprompt`) so the two runs never share a JSONL. The canonical system prompt is read from `train.jsonl` (not retyped) to avoid distribution shift. **Always run both modes; the locked headline number is `--no-system-prompt`.** *(Superseded by Lesson #15 — protocol v2.)*
+
+### 15. Protocol v2 — re-baseline with the system prompt (comparability by re-running, not freezing)
+**Decision:** The strict "freeze Phase 0 settings forever" lock was relaxed. The realistic deployment includes the Reformed system prompt, so the *better* protocol evaluates BOTH the raw baseline and the fine-tuned model WITH it. Comparability is preserved not by freezing one side, but by **re-running the baseline under the new protocol**.
+**Implementation:**
+- `scripts/utils/cefeai.py` — single source of truth for judge prompts, `parse_judge_response`, `wilson_ci`, `baseline_verdict`, and `load_system_prompt` (reads committed `configs/system_prompt.txt`). Both `00` and `07` import these, so the two sides can never drift.
+- `configs/system_prompt.txt` — the canonical Reformed prompt, generated from `train.jsonl` and committed (so no machine needs the gitignored `data/`). A missing file is a HARD error in sysprompt mode — never substitute a different prompt.
+- `00_cefeai_baseline.py` — `--no-system-prompt` reproduces legacy v1; default is v2 (system prompt). Outputs tagged `baseline_<slug>_{sysprompt|noprompt}_<BENCH>`.
+- `07_cefeai_eval.py` — compares against the baseline matching its own prompt mode; warns only if it has to fall back to a mismatched (legacy) baseline.
+**Settings kept:** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`. `enable_thinking=False` because the model was trained on direct Q→A pairs with no thinking traces — eval matches the training format.
+**Action required:** re-run `python scripts/00_cefeai_baseline.py --benchmark both` (v2, ~$0.29) to produce the new baseline before the Phase 4 comparison. The old 4.7% / 19.6% numbers are the v1 (noprompt) baseline and remain valid only for `--no-system-prompt` runs.
 
 ## Technology Stack
 
