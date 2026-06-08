@@ -3,30 +3,39 @@
 
 ---
 
-## Evaluation Protocol v2 — Why we re-baseline now (extra cost, extra effort, and worth it)
+## Evaluation protocol — v1 vs v2 (we tested v2, the data rejected it; **headline = v1, no system prompt**)
 
-**TL;DR:** The original Phase 0 baseline measured the raw model with **no system prompt**. The fine-tuned model is trained *and deployed* **with** a Reformed system prompt. To compare them honestly we must put the **same system prompt on both sides** — which means re-running the Phase 0 baseline (~$0.30, ~2h) under the new protocol. We accepted this extra cost because the project's entire scientific claim depends on the comparison being valid.
+**TL;DR:** The headline, CEFEAI-comparable protocol is **v1 — NO system prompt, on both the baseline and the fine-tuned model**. We briefly tried "v2" (the same Reformed system prompt on both sides) and *ran it*. The data killed it: the prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%**, which is neither comparable to the prompt-free CEFEAI leaderboard nor able to show what fine-tuning added. v2 is retained only as an opt-in (`--system-prompt`) deployment-behavior datapoint.
 
-### The problem with the v1 baseline
-Phase 0 (v1) sent each CEFEAI prompt to raw `qwen/qwen3-8b` as a bare user turn — **no system message** → RR 4.7%, CB 19.6%. But every training record carries a canonical Reformed system prompt, and the deployed model always runs with it. That leaves two dishonest options and one honest one:
+### The reasoning that led us to try v2
+The deployed model always runs with a Reformed system prompt, so it seemed more "realistic" to evaluate both sides with it (only the weights would differ). The extra cost (~$0.30 re-baseline + ~1 day refactor) seemed worth a deployment-realistic, valid comparison.
 
-| Option | What it measures | Verdict |
-|--------|------------------|---------|
-| Fine-tuned **with** prompt vs baseline **without** prompt (v1) | fine-tuning **+** "tell any model it's Reformed" — two effects mixed | ❌ Conflated; can't attribute the gain to fine-tuning |
-| Fine-tuned **without** prompt vs baseline **without** prompt | a config the model was never trained for and will never deploy in | ❌ Understates the real model |
-| **Both with the same prompt (v2)** | **only the weights differ** | ✅ Valid, deployment-realistic |
+### What the v2 baseline run actually showed (2026-06-08)
+Running the v2 baseline (**raw, un-fine-tuned** Qwen3-8B + the Reformed system prompt):
 
-### The cost of doing it right
-- **Re-run the Phase 0 baseline** with the system prompt: **~$0.30** in API calls, **~2h** wall-clock.
-- **~1 day of engineering** to refactor the eval harness: extract shared primitives into `scripts/utils/cefeai.py`, add the committed `configs/system_prompt.txt`, tag outputs by prompt mode, make `07` compare against the matching-mode baseline.
+| Benchmark | v1 (no prompt) | v2 (with prompt) |
+|-----------|----------------|------------------|
+| RR — Any Representation | **4.7%** | **99.3%** |
+| RR — Predominantly Religious | 0.0% | 99.3% |
+| CB — Any Bias | **19.6%** | **87.8%** |
+| CB — Strong Bias | 0.0% | 75.8% |
 
-A cheap-but-invalid improvement number would be worse than no number — it would mislead the arXiv submission and the model card. So we pay the small re-baseline cost to keep the headline claim (*"fine-tuning improved confessional representation by N points"*) defensible.
+Two fatal problems for using v2 as the headline:
+1. **Not comparable to CEFEAI.** Every leaderboard model (Grok 29.3%, GPT-5.4 17.3%, …) is measured prompt-free. A 99.3% produced by a "be a committed Reformed evangelist (TULIP, Five Solas)" instruction no other model received is not a comparison — it's a different experiment.
+2. **It erases the fine-tuning signal.** If the *raw* model + prompt already scores ~99% / ~88%, the *fine-tuned* model + prompt has no headroom. You cannot measure "fine-tuning improved confessional representation by N points" when the prompt alone maxes the metric.
 
-### What stays the same
-`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512` are unchanged. `enable_thinking=False` matches the training format (direct Q→A pairs, no thinking traces). The v1 numbers (4.7% / 19.6%) are preserved and remain the correct baseline for any `--no-system-prompt` run.
+### The decision
+**Headline / comparable protocol = v1 (no system prompt), both sides.** The fine-tuning lives in the weights, so a no-prompt fine-tuned model should still beat the 4.7% raw baseline — and *that* delta is real, leaderboard-comparable, and isolates the fine-tuning. `00` and `07` **default to no prompt**; `--system-prompt` opts into v2.
 
-### Expectation to set in advance
-The v2 RR baseline will be **much higher than 4.7%** — a raw model told "you are a Reformed theological assistant" naturally produces more religious representation. The reported fine-tuning delta is `fine-tuned(v2) − baseline(v2)`, both with the prompt.
+- **v1 baseline (4.7% / 19.6%)** = the reference. Preserved and archived (`results/v1_baseline_archive/`).
+- **v2 (99.3% / 87.8%)** = an interesting "what the deployed assistant does with its production prompt" datapoint, clearly labeled NON-comparable. For CB, high bias is the project's stated intent (explicit confessional bias), not a regression.
+
+### What we kept from the v2 effort (net-positive even though v2 lost)
+- `scripts/utils/cefeai.py` — shared judge prompts / `wilson_ci` / `baseline_verdict` / `load_system_prompt`; kills drift between `00` and `07`.
+- `configs/system_prompt.txt` — committed canonical prompt (no gitignored-`data/` dependency); used by the v2 mode and by training.
+- Prompt-mode-tagged output filenames; `07` auto-compares against the matching-mode baseline.
+
+`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512` unchanged throughout.
 
 ---
 
@@ -41,7 +50,7 @@ First model: `openscriptura/qwen3-8b-reformed-pt-br-v0.1`
 
 ## Phase 0 — Baseline (Week 1, Day 1–2)
 **Goal:** Establish the Qwen3-8B raw baseline on CEFEAI before any fine-tuning.
-**Status:** ✅ **v1 complete** (no system prompt) — both benchmarks run, 1,606 prompts, **$0.7902**. 🔄 **v2 re-baseline pending** (same script, `--benchmark both`, system prompt on — see "Protocol v2" above).
+**Status:** ✅ **Complete.** Headline = **v1 (no system prompt)**: RR 4.7% / CB 19.6% ($0.7902). The v2 (with-prompt) variant was also run (RR 99.3% / CB 87.8%) and **rejected as the headline** — it saturates the metric (see "Evaluation protocol — v1 vs v2" above). v1 is the comparable baseline; both are in `results/`.
 
 ### Script: `00_cefeai_baseline.py` ✅
 - Run **150 prompts** from CEFEAI Religious Representation benchmark
@@ -318,10 +327,10 @@ scp -P <port> -i ~/.ssh/id_rsa data/merged/eval.jsonl  root@<host>:/workspace/op
 **Status:** ✅ **Script written** (`07_cefeai_eval.py`) — run pending (needs Phase 3 model).
 
 **Script: `07_cefeai_eval.py`** — local inference (transformers, greedy, `enable_thinking=False`) + OpenRouter judge.
-- **Protocol v2:** evaluates WITH the Reformed system prompt (default); `--no-system-prompt` for the v1 legacy comparison. Compares against the baseline matching its own prompt mode.
+- **Headline = v1 (no system prompt), default.** `--system-prompt` opts into the v2 deployment-behavior datapoint (not leaderboard-comparable). Compares against the baseline matching its own prompt mode (v1 → the legacy untagged `results/baseline_qwen_qwen3_8b_*` files).
 - Same locked inference settings as the baseline (`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`); judge prompts / Wilson CI / system prompt shared via `scripts/utils/cefeai.py`.
 - Auto-detects merged model vs PEFT adapter; prints direction-aware verdict (RR up=better, CB down=better).
-- **Run order:** v2 re-baseline first (`00_cefeai_baseline.py --benchmark both`), then `07 ... --benchmark both`.
+- **Run:** `07 --model-path checkpoints/final/merged --benchmark both` (v1 headline vs the v1 baseline). Optionally add `--system-prompt` for the deployment-behavior datapoint.
 
 ### Evaluation targets (Religious Representation)
 | Metric | Baseline — Qwen3-8B raw | Target v0.1 | Target v1.0 |
@@ -450,14 +459,14 @@ The model does NOT blend traditions — a Reformed model speaks Reformed only.
 | Phase 0: CEFEAI baseline v1 ✅ | OpenRouter | **$0.7902** (RR $0.0729 + CB $0.7173) |
 | Phase 1: Dataset Tier B ✅ | DeepSeek API | **~$3.50** (actual; planned $1 — 3.5× over budget due to resume issues) |
 | Phase 2: 4 experiments ✅ | Vast.ai RTX 4090 | **~$3.50** (actual: ~6.5h × $0.455/hr + setup) |
-| **Protocol v2 re-baseline** 🔄 | OpenRouter | **~$0.30** (extra cost — see "Protocol v2" rationale) |
+| v2 baseline experiment ✅ (ran, then rejected as headline) | OpenRouter | **~$0.83** (RR $0.074 + CB $0.76) |
 | Phase 3: Final training + export 🔲 | A100 80GB | ~$5–7 (~3–4h × $1.80/hr) |
-| Phase 4: CEFEAI re-eval (v2) 🔲 | OpenRouter (judge only; inference is local/free) | ~$0.30 |
+| Phase 4: CEFEAI re-eval (v1 headline) 🔲 | OpenRouter (judge only; inference is local/free) | ~$0.30 |
 | Misc | — | ~$0.50 |
-| **Total (one-time)** | | **~$14–16** |
+| **Total (one-time)** | | **~$14–17** |
 | HF PRO (demo + ZeroGPU) | HuggingFace | **$9/month** |
 
-> The Protocol v2 re-baseline is a deliberate **extra** line item (~$0.30 + ~1 day eng). It is the price of a valid baseline→fine-tuned comparison; see the "Protocol v2" section at the top for the full rationale.
+> The v2 baseline (~$0.83) was a deliberate experiment that produced a clear negative result (the prompt saturates the metric — see "Evaluation protocol — v1 vs v2"). Cheap insurance: it confirmed v1 is the correct headline before we spent A100 money on the final model/eval.
 
 ---
 
@@ -491,17 +500,15 @@ The model does NOT blend traditions — a Reformed model speaks Reformed only.
 ✅  Phase 3/4 scripts WRITTEN + reviewed (2× /code-review) + simulated (38/38)
     05_train_final.py · 06_export.py · 07_cefeai_eval.py · utils/cefeai.py
 
-▶  NOW — Protocol v2 re-baseline (the extra step we chose to take)
-    python scripts/00_cefeai_baseline.py --benchmark both        # ~$0.30, ~2h, system prompt ON
-    → results/baseline_qwen_qwen3_8b_sysprompt_{RR,CB}_summary.json
-    WHY: the v1 baseline had no system prompt; the fine-tuned model deploys WITH one.
-         Re-baselining keeps the improvement claim valid (only weights differ).
+✅  Eval protocol decided — HEADLINE = v1 (no system prompt). v2 tested & rejected
+    (raw + prompt saturated to RR 99.3% / CB 87.8%). Baselines in results/.
 
 ▶  NEXT — Phase 3 on A100 80GB:
     python scripts/05_train_final.py --config configs/final.yaml   # full bf16, early stopping
     python scripts/06_export.py      --config configs/final.yaml --push-to-hub
 
-▶  THEN — Phase 4 (v2 eval) on the same A100:
+▶  THEN — Phase 4 (v1 headline) on the same A100:
     python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both
-    Compares fine-tuned(v2) vs baseline(v2). Also run --no-system-prompt for the v1 delta.
+    Compares fine-tuned(v1, no prompt) vs baseline(v1) → the leaderboard-comparable delta.
+    Optionally add --system-prompt for the v2 deployment-behavior datapoint.
 ```

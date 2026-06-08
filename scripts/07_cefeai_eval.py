@@ -497,8 +497,10 @@ Examples:
                         help="Path to merged model or PEFT adapter directory")
     parser.add_argument("--benchmark", choices=["rr", "cb", "both"], default="both",
                         help="CEFEAI benchmark to run (default: both)")
-    parser.add_argument("--no-system-prompt", action="store_true",
-                        help="Run without Reformed system prompt (baseline-comparable mode)")
+    parser.add_argument("--system-prompt", dest="use_system_prompt", action="store_true", default=False,
+                        help="v2 deployment-behavior eval (WITH the Reformed system prompt). "
+                             "NOT CEFEAI-comparable (the prompt saturates the metric). "
+                             "Default (no flag): v1 — no system prompt, the headline comparison.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate config without inference or API calls")
     parser.add_argument("--resume", action="store_true", default=True,
@@ -521,25 +523,24 @@ Examples:
         log.error("%s", exc)
         sys.exit(1)
 
-    use_system_prompt = not args.no_system_prompt
-    # Protocol v2: load the canonical Reformed system prompt (committed in
-    # configs/system_prompt.txt) — None in baseline-comparable (v1) mode. A
-    # missing prompt file is a HARD error: never evaluate under a prompt that
-    # differs from training. Compare against the matching-mode baseline.
+    use_system_prompt = args.use_system_prompt
+    # Headline protocol = v1 (NO system prompt) — CEFEAI-comparable; isolates the
+    # fine-tuning effect (weights only). Opt into v2 deployment-behavior with
+    # --system-prompt (NOT comparable: the prompt saturates the metric).
     system_prompt = None
     if use_system_prompt:
         try:
             system_prompt = load_system_prompt()
         except FileNotFoundError as exc:
             log.error("%s", exc)
-            log.error("Or run with --no-system-prompt for the legacy v1 comparison.")
+            log.error("Drop --system-prompt to run the v1 (headline) eval instead.")
             sys.exit(1)
 
     print("=" * 64)
     print("  OpenScriptura — CEFEAI Phase 4 Re-evaluation")
     print("=" * 64)
     print(f"  Model path    : {model_path}")
-    print(f"  System prompt : {'yes (v2 — Reformed PT-BR)' if use_system_prompt else 'no (v1 legacy)'}")
+    print(f"  System prompt : {'yes (v2 deployment-behavior — NOT comparable)' if use_system_prompt else 'no (v1 — headline, CEFEAI-comparable)'}")
     print(f"  Judge         : {judge}")
     print(f"  Benchmarks    : {args.benchmark.upper()}")
     print(f"  Temperature   : {TEMPERATURE}  Seed: {SEED}  Thinking: {ENABLE_THINKING}")
@@ -547,9 +548,13 @@ Examples:
     if args.dry_run:
         print("  ⚠️  DRY-RUN — no inference or API calls")
     print("=" * 64)
-    print("  Protocol v2: the system prompt is applied to BOTH baseline and this")
-    print("  eval, so the comparison stays valid. Run 00_cefeai_baseline.py under")
-    print("  the SAME mode (default v2, or --no-system-prompt for v1) to compare.")
+    if use_system_prompt:
+        print("  ⚠️  v2 mode: WITH the system prompt the metric saturates (raw baseline")
+        print("      was RR 99.3% / CB 87.8%) — report this as deployment behavior only,")
+        print("      NOT as a leaderboard number. The headline run is the default (no flag).")
+    else:
+        print("  v1 headline: no system prompt — comparable to the CEFEAI leaderboard and")
+        print("  to the v1 baseline (results/baseline_qwen_qwen3_8b_*). Isolates fine-tuning.")
     print("=" * 64)
     print()
 

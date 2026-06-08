@@ -73,11 +73,11 @@ Model naming convention: `openscriptura/{base}-{tradition}-{lang}-{version}`
 
 ---
 
-## Evaluation Protocol (v1 → v2)
+## Evaluation Protocol — headline is **v1 (no system prompt)**
 
-The original baseline (v1) measured raw Qwen3-8B with **no system prompt** (RR 4.7%, CB 19.6%). The fine-tuned model is trained and deployed **with** a Reformed system prompt — so comparing fine-tuned-with-prompt against baseline-without-prompt would conflate two effects (the fine-tuning *and* simply telling a model it's Reformed).
+CEFEAI comparisons use **no system prompt**, on both the raw baseline and the fine-tuned model. The fine-tuning lives in the weights, so a no-prompt fine-tuned model is compared against the no-prompt raw baseline (RR 4.7% / CB 19.6%) — a delta that is leaderboard-comparable and isolates what fine-tuning added.
 
-**Protocol v2** fixes this by evaluating **both** the raw baseline and the fine-tuned model with the *same* committed system prompt (`configs/system_prompt.txt`). The only thing that differs between the two runs is the model weights — which is exactly what we want to measure. This costs an extra baseline re-run (~$0.30, ~2h) and a harness refactor, accepted because the project's headline claim depends on the comparison being valid. The v1 numbers are preserved for `--no-system-prompt` runs. *(Expect the v2 RR baseline to be well above 4.7% — a prompted raw model represents religion far more than an unprompted one.)*
+We also *tested* a "v2" protocol (the same Reformed system prompt on both sides) and **ran it** — then rejected it. The prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%**, which (a) isn't comparable to the prompt-free CEFEAI leaderboard and (b) leaves no headroom to show what fine-tuning added. So v1 is the headline; v2 is retained only as an opt-in `--system-prompt` deployment-behavior datapoint, never a leaderboard number. (Inference settings are fixed throughout: `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`.)
 
 ---
 
@@ -174,11 +174,11 @@ cp .env.example .env
 ### Run CEFEAI baseline
 
 ```bash
-# Protocol v2 (default — system prompt on, the comparable baseline). ~$0.30 | ~2h
+# Headline: v1, NO system prompt (CEFEAI-comparable) → RR 4.7% / CB 19.6%. ~$0.30 | ~2h
 python scripts/00_cefeai_baseline.py --benchmark both
 
-# Protocol v1 (legacy — no system prompt; reproduces the original 4.7% / 19.6%)
-python scripts/00_cefeai_baseline.py --benchmark both --no-system-prompt
+# Optional: v2 deployment-behavior datapoint (NOT comparable — prompt saturates the metric)
+python scripts/00_cefeai_baseline.py --benchmark both --system-prompt
 ```
 
 ### Build the dataset (Reformed PT-BR v0.1)
@@ -216,7 +216,7 @@ python scripts/06_export.py      --config configs/final.yaml --push-to-hub   # m
 ### Re-evaluate on CEFEAI (Phase 4)
 
 ```bash
-# v2 (system prompt) — compares against the v2 baseline above
+# v1 headline (no system prompt) — compares against the v1 baseline
 python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both
 ```
 

@@ -31,12 +31,12 @@ OpenScriptura demonstrates that targeted fine-tuning can change this: transformi
 
 | Model | Base | Tradition | Language | Status | CEFEAI RR (baseline) | CEFEAI RR (fine-tuned) |
 |---|---|---|---|---|---|---|
-| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 final training pending | **4.7%** (v1, no system prompt) | pending (v2) |
+| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 final training pending | **4.7%** (no system prompt) | pending |
 | qwen3-8b-lutheran-en-v0.1 | Qwen3-8B | Lutheran | EN | 📋 Planned | — |
 | qwen3-8b-anglican-en-v0.1 | Qwen3-8B | Anglican | EN | 📋 Planned | — |
 | gpt-oss-20b-v1.0 | GPT-OSS 20B | Multi-tradition | Multilingual | 📋 Planned | — |
 
-> **Pipeline status:** dataset built (2,968 records); 2×2 LoRA sweep complete (winner **r=64, lr=2e-4**); final training, GGUF export, and **protocol-v2 evaluation** scripts written and pending the A100 run.
+> **Pipeline status:** dataset built (2,968 records); 2×2 LoRA sweep complete (winner **r=64, lr=2e-4**); final training, GGUF export, and evaluation scripts written and pending the A100 run. Evaluation headline = **no system prompt** (CEFEAI-comparable).
 
 Model naming: `openscriptura/{base}-{tradition}-{lang}-{version}`
 
@@ -81,7 +81,7 @@ All OpenScriptura models are evaluated on both public CEFEAI benchmarks:
 
 Results are published in each model's README with direct comparison against the untuned base model.
 
-**Evaluation protocol (v2).** Both the raw baseline and the fine-tuned model are evaluated **with the same Reformed system prompt** (`configs/system_prompt.txt`) and identical inference settings (`temperature=0.0, seed=42, enable_thinking=False`). The only difference between the two runs is the model weights, so the reported lift is attributable to fine-tuning alone — not to prompt injection. (The original v1 baseline, measured with no system prompt → RR 4.7% / CB 19.6%, is retained for `--no-system-prompt` comparisons.)
+**Evaluation protocol (headline = no system prompt).** Both the raw baseline and the fine-tuned model are evaluated with **no system prompt** and identical inference settings (`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`), so the reported lift is attributable to fine-tuning (the weights) and stays comparable to the prompt-free CEFEAI leaderboard. The raw baseline is RR 4.7% / CB 19.6%. We tested a "with system prompt" variant and rejected it as the headline: the Reformed prompt alone saturated the *raw* model to RR 99.3% / CB 87.8% (not leaderboard-comparable, and no headroom to show the fine-tuning effect). That variant is kept only as an opt-in deployment-behavior datapoint.
 
 ---
 

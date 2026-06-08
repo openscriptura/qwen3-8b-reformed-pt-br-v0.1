@@ -6,34 +6,44 @@ is the narrative + decision rationale. Phase detail is in [`IMPLEMENTATION_PLAN.
 
 ---
 
-## ⭐ Headline decision — Evaluation Protocol v2 (re-baseline with the system prompt)
+## ⭐ Headline decision — evaluation protocol is **v1 (no system prompt)**; v2 tried & rejected
 
-**Date:** 2026-06-08 · **Status:** adopted; v2 baseline run pending.
+**Date:** 2026-06-08 · **Status:** decided (data-driven).
 
-**What changed.** Evaluation now puts the **same Reformed system prompt on both sides** of the
-comparison — the raw baseline *and* the fine-tuned model — instead of the v1 setup where the
-baseline had no system prompt at all.
+**The question.** The fine-tuned model deploys with a Reformed system prompt. Should evaluation put
+that prompt on *both* sides (v2), or on *neither* (v1, like the original CEFEAI-comparable baseline)?
 
-**Why now, given it costs more.** The v1 baseline (RR 4.7% / CB 19.6%) measured raw Qwen3-8B with a
-bare user prompt. But the fine-tuned model is trained and deployed **with** a Reformed system prompt.
-Comparing fine-tuned-*with*-prompt against baseline-*without*-prompt would blend two effects — the
-fine-tuning, and simply telling any model "you are a Reformed assistant" — and we could not honestly
-credit the gain to fine-tuning. Evaluating the fine-tuned model *without* its prompt is equally wrong:
-it tests a configuration the model was never trained for and will never ship in.
+**What we did.** We built the v2 path (shared `utils/cefeai.py`, committed `configs/system_prompt.txt`,
+prompt-mode-tagged outputs, `--system-prompt` flag) and **ran the v2 baseline** (~$0.83) to find out.
 
-**The price we accepted.** Re-running the Phase 0 baseline under the new protocol costs **~$0.30** in
-API calls and **~2h** wall-clock, plus **~1 day of engineering** to refactor the harness (shared
-`utils/cefeai.py`, committed `configs/system_prompt.txt`, prompt-mode-tagged outputs). We judged a
-cheap-but-invalid number to be *worse* than no number — the arXiv claim and the model card both
-depend on the comparison being valid. So we pay the small cost to keep
-"fine-tuning improved confessional representation by N points" defensible.
+**What the data said.** Raw, un-fine-tuned Qwen3-8B **+ the Reformed system prompt** scored:
 
-**What we kept.** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512` — unchanged.
-`enable_thinking=False` matches the training format (direct Q→A pairs, no thinking traces).
-The v1 numbers are preserved and reproducible via `--no-system-prompt`.
+| | v1 (no prompt) | v2 (with prompt) |
+|---|---|---|
+| RR — Any Representation | **4.7%** | **99.3%** |
+| CB — Any Bias | **19.6%** | **87.8%** |
+| CB — Strong Bias | 0.0% | 75.8% |
 
-**Expectation.** The v2 RR baseline will be **well above 4.7%** (a prompted raw model represents
-religion far more than an unprompted one). The reported delta is `fine-tuned(v2) − baseline(v2)`.
+The system prompt **alone** saturated the metric. That makes v2 unusable as the headline:
+1. **Not comparable to CEFEAI** — leaderboard models are measured prompt-free; a 99.3% from a
+   "be a committed Reformed evangelist" instruction no other model got is a different experiment.
+2. **Erases the fine-tuning signal** — if raw+prompt already ≈99% / ≈88%, tuned+prompt has no
+   headroom; "improved by N points" becomes unmeasurable.
+
+**Decision.** **Headline / CEFEAI-comparable protocol = v1 — NO system prompt, on both sides.** The
+fine-tuning is in the weights, so a no-prompt fine-tuned model should still beat the 4.7% raw baseline,
+and that delta is real and comparable. `00`/`07` **default to no prompt**; `--system-prompt` opts into
+v2, kept only as a labeled deployment-behavior datapoint (for CB, high bias is by-design intent).
+
+**Net positive from the detour.** The shared `utils/cefeai.py` and committed `configs/system_prompt.txt`
+are good regardless and stay. The ~$0.83 v2 run was cheap insurance: it caught the saturation problem
+*before* we spent A100 money on the final model and eval. The v1 baseline (4.7% / 19.6%) is archived in
+`results/v1_baseline_archive/`.
+
+**Unchanged throughout:** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`.
+
+**Console gotcha noted:** `00`'s RR leaderboard printed "this run = 4.7%" (a stale static row) while the
+real v2 RR was 99.3% — trust `results/..._summary.json`, not the leaderboard insert.
 
 ---
 
@@ -79,8 +89,9 @@ religion far more than an unprompted one). The reported delta is `fine-tuned(v2)
   `--push-to-hub`; `--force-merge`.
 
 ## Phase 4 — CEFEAI re-evaluation ✅ script written (run pending)
-- `07_cefeai_eval.py`: local inference (greedy) + OpenRouter judge; protocol-v2 by default
-  (`--no-system-prompt` for v1); compares against the baseline matching its prompt mode.
+- `07_cefeai_eval.py`: local inference (greedy) + OpenRouter judge; **v1 (no system prompt) by
+  default** (`--system-prompt` opts into the v2 datapoint); compares against the baseline matching
+  its prompt mode.
 
 ## Shared infrastructure
 - **`scripts/utils/cefeai.py`** (new): single source of truth for judge prompts, `parse_judge_response`,
@@ -96,13 +107,14 @@ Before any GPU spend, the Phase 3/4 scripts went through:
 - **Two `/code-review` passes** (extra-high effort, recall mode) → 11 real findings fixed across
   reviews (EarlyStopping assertion crash, missing `enable_input_require_grads`, best-checkpoint
   selection, device_map multi-GPU split, dry-run offline-safety, RR/CB verdict direction, cost-budget
-  scope, empty-prompt-file guard, …). See Lessons #12–#15.
+  scope, empty-prompt-file guard, …). See Lessons #12–#16.
 - **A local simulation harness** (`sim_phase34.py`, kept out of the repo) — **38/38** checks: mocks the
   trainer to exercise early-stopping patience, best-checkpoint detection, verdict direction,
   system-prompt loading (incl. hard-fail on missing/empty), judge parsing, Wilson CI, and real
   `--dry-run`s for `00`/`05`/`06`/`07`.
 
 ## What remains (requires GPU / API spend — not yet run)
-1. **Protocol v2 re-baseline:** `python scripts/00_cefeai_baseline.py --benchmark both` (~$0.30).
-2. **Phase 3 on A100:** `05_train_final.py` → `06_export.py --push-to-hub`.
-3. **Phase 4 (v2):** `07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both`.
+- ✅ Baselines done: v1 headline (4.7% / 19.6%) + v2 datapoint (99.3% / 87.8%) both in `results/`.
+1. **Phase 3 on A100:** `05_train_final.py` → `06_export.py --push-to-hub`.
+2. **Phase 4 (v1 headline):** `07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both`
+   (no prompt; compares vs the v1 baseline). Optionally `--system-prompt` for the v2 datapoint.

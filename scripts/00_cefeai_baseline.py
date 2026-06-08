@@ -51,14 +51,16 @@ BENCHMARK_FILES: dict[str, Path] = {
 RESULTS_DIR = PROJECT_ROOT / "results"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
-# Inference settings — must be identical for baseline and post-training eval
-# so that comparisons are valid (VALIDATION_REPORT.md M2, Panel 1).
+# Inference settings — identical for baseline and post-training eval so the
+# comparison is valid (VALIDATION_REPORT.md M2, Panel 1).
 #
-# Protocol v2: the Reformed system prompt is now part of the protocol and is
-# applied to BOTH the raw baseline (here) and the fine-tuned eval
-# (07_cefeai_eval.py), so the only difference between the two runs is the model
-# weights. Run with --no-system-prompt to reproduce the legacy v1 protocol
-# (no system prompt; the original 4.7% / 19.6% numbers).
+# Headline protocol = v1 (NO system prompt) — CEFEAI-leaderboard-comparable, and
+# the only setup that isolates the fine-tuning effect (weights only). The v2
+# "deployment-behavior" protocol (--system-prompt) was tried and REJECTED as the
+# headline: the Reformed prompt alone saturated the raw model (RR 99.3% / CB
+# 87.8%), which is neither comparable to the prompt-free leaderboard nor able to
+# show what fine-tuning added. v2 is kept only as an opt-in deployment datapoint.
+# See CLAUDE.md Lessons #14–#16 and IMPLEMENTATION_PLAN.md "Protocol v1 vs v2".
 ENABLE_THINKING = False   # Qwen3: disable <think> tokens (matches training format)
 TEMPERATURE = 0.0         # deterministic, reproducible
 MAX_TOKENS = 512          # sufficient for CEFEAI responses
@@ -250,7 +252,7 @@ async def run_benchmark(
         log.info("[DRY-RUN] Configuration OK for benchmark=%s", benchmark.upper())
         log.info("[DRY-RUN]   model        : %s", model)
         log.info("[DRY-RUN]   judge        : %s", judge_model)
-        log.info("[DRY-RUN]   system prompt: %s", "yes (Reformed PT-BR)" if system_prompt else "no (legacy v1)")
+        log.info("[DRY-RUN]   system prompt: %s", "yes (v2 deployment-behavior)" if system_prompt else "no (v1 — headline, comparable)")
         log.info("[DRY-RUN]   enable_thinking: %s", ENABLE_THINKING)
         log.info("[DRY-RUN]   temperature  : %s", TEMPERATURE)
         log.info("[DRY-RUN]   cost_limit   : $%.2f", cost_limit)
@@ -421,12 +423,14 @@ Examples:
         help="Ignore existing results and start fresh.",
     )
     parser.add_argument(
-        "--no-system-prompt",
+        "--system-prompt",
         dest="use_system_prompt",
-        action="store_false",
-        default=True,
-        help="Reproduce the legacy v1 protocol (no system prompt). Default: v2, "
-             "with the canonical Reformed system prompt (matches Phase 4 eval).",
+        action="store_true",
+        default=False,
+        help="Run the v2 deployment-behavior protocol (WITH the Reformed system "
+             "prompt). NOTE: not CEFEAI-comparable — the prompt alone saturates the "
+             "metric (raw model scored RR 99.3%% / CB 87.8%%). Default (no flag) is "
+             "v1: NO system prompt — the headline, leaderboard-comparable baseline.",
     )
     return parser.parse_args()
 
@@ -457,17 +461,16 @@ def main() -> None:
 
     benchmarks = ["rr", "cb"] if args.benchmark == "both" else [args.benchmark]
 
-    # Protocol v2: load the canonical Reformed system prompt (committed in
-    # configs/system_prompt.txt) unless --no-system-prompt is given. A missing
-    # prompt file is a hard error in v2 mode — we never run the protocol with a
-    # prompt that differs from training/eval.
+    # Headline protocol = v1 (NO system prompt) — CEFEAI-comparable. Opt into the
+    # v2 deployment-behavior protocol with --system-prompt (NOT comparable: the
+    # Reformed prompt alone saturated the raw model to RR 99.3% / CB 87.8%).
     system_prompt = None
     if args.use_system_prompt:
         try:
             system_prompt = load_system_prompt()
         except FileNotFoundError as exc:
             log.error("%s", exc)
-            log.error("Or run with --no-system-prompt for the legacy v1 baseline.")
+            log.error("Drop --system-prompt to run the v1 (headline) baseline instead.")
             sys.exit(1)
 
     W = 64
@@ -477,10 +480,13 @@ def main() -> None:
     print(f"  Model       : {model}")
     print(f"  Judge       : {judge}")
     print(f"  Benchmarks  : {', '.join(b.upper() for b in benchmarks)}")
-    print(f"  System prompt: {'yes (v2 — Reformed PT-BR)' if system_prompt else 'no (v1 legacy)'}")
+    print(f"  System prompt: {'yes (v2 deployment-behavior — NOT leaderboard-comparable)' if system_prompt else 'no (v1 — headline, CEFEAI-comparable)'}")
     print(f"  Cost limit  : ${cost_limit:.2f}")
     if args.dry_run:
         print("  ⚠️  DRY-RUN — no API calls will be made")
+    if system_prompt:
+        print("  ⚠️  v2 mode: the system prompt alone saturates the metric — use this")
+        print("      only as a deployment-behavior datapoint, not vs the CEFEAI leaderboard.")
     print("=" * W)
     print()
 

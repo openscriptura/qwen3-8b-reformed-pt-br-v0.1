@@ -9,7 +9,7 @@
 
 ---
 
-> **Project status (June 2026):** `v0.1` work-in-progress. Phase 0 baseline ✅ (v1, no system prompt: RR 4.7% / CB 19.6%) · Phase 1 dataset ✅ (2,968 records → 2,873 train / 151 eval) · Phase 2 LoRA sweep ✅ (winner **r=64, lr=2e-4**) · Phase 3 final-training + GGUF-export and Phase 4 evaluation scripts (`05_`–`07_`) ✅ **written, reviewed, simulated** — pending the A100 run. Evaluation upgraded to **protocol v2**: the baseline is re-run *with* the Reformed system prompt so the baseline↔fine-tuned comparison is valid (see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) → "Protocol v2" and [`CHANGELOG.md`](CHANGELOG.md)). The Reformed pt-BR model has not been released yet.
+> **Project status (June 2026):** `v0.1` work-in-progress. Phase 0 baseline ✅ (v1, no system prompt: RR 4.7% / CB 19.6%) · Phase 1 dataset ✅ (2,968 records → 2,873 train / 151 eval) · Phase 2 LoRA sweep ✅ (winner **r=64, lr=2e-4**) · Phase 3 final-training + GGUF-export and Phase 4 evaluation scripts (`05_`–`07_`) ✅ **written, reviewed, simulated** — pending the A100 run. Evaluation headline = **no system prompt** (CEFEAI-comparable): a "with system prompt" variant was tested and rejected — the prompt alone saturated the raw model to RR 99.3% / CB 87.8% (see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) → "Evaluation protocol — v1 vs v2" and [`CHANGELOG.md`](CHANGELOG.md)). The Reformed pt-BR model has not been released yet.
 
 ## What is OpenScriptura
 
@@ -103,7 +103,8 @@ python scripts/00_cefeai_baseline.py --dry-run
 
 # 2. Run a benchmark. rr = Religious Representation (150), cb = Conversion Bias (1456), both = default.
 #    Resume is ON by default (skips already-completed prompts); add --no-resume to start fresh.
-#    Protocol v2 (system prompt) is the default; add --no-system-prompt for the legacy v1 run.
+#    Default = no system prompt (CEFEAI-comparable headline). Add --system-prompt for the
+#    deployment-behavior datapoint (NOT comparable — the prompt saturates the metric).
 python scripts/00_cefeai_baseline.py --benchmark both
 
 # Cost: ~$0.30 | guarded by a hard cost limit (COST_LIMIT_USD_PHASE0, default $2.00)

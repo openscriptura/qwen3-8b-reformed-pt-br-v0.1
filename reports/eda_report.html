@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenScriptura EDA</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0e1116;--card:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--success:#3fb950;--warning:#d29922;--info:#388bfd}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;padding:24px}
+h1{font-size:1.5rem;margin-bottom:4px}
+h2{font-size:1.05rem;margin:24px 0 12px;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:6px}
+.meta{color:var(--muted);font-size:12px;margin-bottom:24px}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px}
+.kpi-value{font-size:1.8rem;font-weight:700;margin-bottom:2px}
+.kpi-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+@media(max-width:700px){.chart-grid{grid-template-columns:1fr}}
+.chart-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px}
+.chart-card h3{font-size:13px;color:var(--muted);margin-bottom:12px;font-weight:500}
+.chart-wrap{position:relative;height:240px}
+.status-ok{color:var(--success)} .status-warn{color:var(--warning)}
+table{width:100%;border-collapse:collapse;margin-bottom:24px;background:var(--card);border-radius:8px;overflow:hidden}
+th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th.r,td.r{text-align:right}
+td{padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px}
+</style>
+</head>
+<body>
+<h1>OpenScriptura — EDA Report</h1>
+<div class="meta">Generated: 2026-06-07 22:00</div>
+
+<div class="kpi-grid">
+  <div class="kpi"><div class="kpi-value">2,968</div><div class="kpi-label">Total records</div></div>
+  <div class="kpi"><div class="kpi-value">1,007</div><div class="kpi-label">Unique sources</div></div>
+  <div class="kpi"><div class="kpi-value">99.5%</div><div class="kpi-label">With conf. refs</div></div>
+  <div class="kpi"><div class="kpi-value">0</div><div class="kpi-label">Duplicates</div></div>
+</div>
+
+<h2>Tier Progress</h2>
+<table>
+  <thead><tr><th>Tier</th><th class="r">Count</th><th class="r">Target</th><th>Progress</th><th>Status</th></tr></thead>
+  <tbody>
+  <tr><td>Tier C</td><td class='r'>839</td><td class='r'>1,000–2,000</td><td><div style="background:#30363d;border-radius:4px;height:8px;width:120px"><div style="background:#388bfd;border-radius:4px;height:8px;width:42%"></div></div></td><td>⚠️ Below target</td></tr>
+  <tr><td>Tier B</td><td class='r'>2,129</td><td class='r'>3,000–4,000</td><td><div style="background:#30363d;border-radius:4px;height:8px;width:120px"><div style="background:#388bfd;border-radius:4px;height:8px;width:53%"></div></div></td><td>⚠️ Below target</td></tr>
+  <tr><td>Tier A</td><td class='r'>0</td><td class='r'>500–1,000</td><td><div style="background:#30363d;border-radius:4px;height:8px;width:120px"><div style="background:#388bfd;border-radius:4px;height:8px;width:0%"></div></div></td><td>⚠️ Below target</td></tr>
+  </tbody>
+</table>
+
+<div class="chart-grid">
+  <div class="chart-card">
+    <h3>Records by Source Family</h3>
+    <div class="chart-wrap"><canvas id="famChart"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <h3>Answer Length Distribution (words)</h3>
+    <div class="chart-wrap"><canvas id="lenChart"></canvas></div>
+  </div>
+</div>
+
+<h2>Length Statistics</h2>
+<table>
+  <thead><tr><th>Field</th><th class="r">Min</th><th class="r">Mean</th><th class="r">Median</th><th class="r">p90</th><th class="r">Max</th></tr></thead>
+  <tbody>
+  <tr><td>Question</td><td class='r'>3</td><td class='r'>18.5</td><td class='r'>18.0</td><td class='r'>26</td><td class='r'>54</td></tr>
+  <tr><td>Answer</td><td class='r'>4</td><td class='r'>97.7</td><td class='r'>100.0</td><td class='r'>138</td><td class='r'>2064</td></tr>
+  <tr><td>Total (Q+A)</td><td class='r'>9</td><td class='r'>116.1</td><td class='r'>119.0</td><td class='r'>161</td><td class='r'>2090</td></tr>
+  </tbody>
+</table>
+
+<h2>Tier B Quality Scores</h2>
+<div class="kpi-grid">
+  <div class="kpi"><div class="kpi-value">2,129</div><div class="kpi-label">Tier B records</div></div>
+  <div class="kpi"><div class="kpi-value">96.1</div><div class="kpi-label">Mean score</div></div>
+  <div class="kpi"><div class="kpi-value">93.0</div><div class="kpi-label">Min score</div></div>
+  <div class="kpi"><div class="kpi-value">94.0</div><div class="kpi-label">p10 score</div></div>
+</div>
+
+<script>
+new Chart(document.getElementById('famChart'), {
+  type: 'bar',
+  data: {
+    labels: ["spurgeon", "monergismo", "WLC", "WCF", "LCF", "Heidelberg", "WSC", "Dort"],
+    datasets: [{ label: 'Records', data: [1504, 625, 190, 173, 155, 128, 106, 87], backgroundColor: '#388bfd', borderRadius: 3 }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { ticks: { font: { size: 11 } } }, y: { ticks: { precision: 0 } } }
+  }
+});
+new Chart(document.getElementById('lenChart'), {
+  type: 'bar',
+  data: {
+    labels: ["0", "50", "100", "150", "200", "250", "300", "350", "400", "450", "500", "550", "600", "650", "700", "750", "800", "850", "900", "950", "1000", "1050", "1100", "1150", "1200", "1250", "1300", "1350", "1400", "1450", "1500", "1550", "1600", "1650", "1700", "1750", "1800", "1850", "1900", "1950", "2000", "2050", "2100"],
+    datasets: [{ label: 'Records', data: [364, 1102, 1338, 149, 7, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0], backgroundColor: '#3fb950', borderRadius: 2 }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { ticks: { font: { size: 10 } } }, y: { ticks: { precision: 0 } } }
+  }
+});
+</script>
+</body>
+</html>
