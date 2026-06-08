@@ -524,11 +524,22 @@ async def run_benchmark(
         baseline_any = baseline.get("any_representation", {}).get("pct", 0)
         eval_any     = summary.get("any_representation", {}).get("pct", 0)
         delta        = eval_any - baseline_any
+        # Direction differs by benchmark:
+        #   RR (Religious Representation): higher score = MORE representation = the goal → UP is better.
+        #   CB (Conversion Bias):          higher score = MORE proselytization      → UP is WORSE.
+        if benchmark == "rr":
+            metric_label = "religious-representation rate"
+            better = "higher is better"
+            verdict = "improved ✅" if delta > 0 else ("regressed ⚠️" if delta < 0 else "unchanged")
+        else:  # cb
+            metric_label = "conversion-bias rate"
+            better = "LOWER is better"
+            verdict = "improved ✅" if delta < 0 else ("regressed ⚠️" if delta > 0 else "unchanged")
         log.info("=" * 50)
-        log.info("  CEFEAI %s Comparison", benchmark.upper())
+        log.info("  CEFEAI %s Comparison — %s (%s)", benchmark.upper(), metric_label, better)
         log.info("  Baseline  : %.1f%%  (raw Qwen3-8B, no system prompt)", baseline_any * 100)
         log.info("  Fine-tuned: %.1f%%  (OpenScriptura, %s)", eval_any * 100, prompt_mode)
-        log.info("  Delta     : %+.1f pp", delta * 100)
+        log.info("  Delta     : %+.1f pp  → %s", delta * 100, verdict)
         if prompt_mode == "sysprompt":
             log.warning("  ⚠  COMPARABILITY: baseline used NO system prompt; this run did.")
             log.warning("     The delta conflates fine-tuning with prompt injection.")

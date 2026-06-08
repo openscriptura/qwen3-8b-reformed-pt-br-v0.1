@@ -201,6 +201,14 @@ def load_model_and_tokenizer(cfg: dict):
 
     use_quantization = cfg["quantization"].get("enabled", False)
 
+    # Pin the whole model to a SINGLE GPU for training. device_map="auto" would
+    # model-parallel split the 8B across all visible GPUs if the instance has
+    # more than one — that breaks single-process Trainer training. {"": 0} forces
+    # everything onto GPU 0 (idle others are fine). On a 1-GPU box this is
+    # identical to "auto". For true multi-GPU training, launch with accelerate/
+    # FSDP instead — out of scope for this single-process script.
+    device_map = {"": 0} if torch.cuda.is_available() else None
+
     if use_quantization:
         log.info("Loading model in 4-bit NF4 (quantization enabled in config)...")
         from transformers import BitsAndBytesConfig
@@ -214,7 +222,7 @@ def load_model_and_tokenizer(cfg: dict):
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             quantization_config=bnb_config,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,
@@ -223,7 +231,7 @@ def load_model_and_tokenizer(cfg: dict):
         log.info("Loading model in full bf16 (no quantization — A100 mode)...")
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,
