@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _RETRY_POLICY = dict(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=4, max=60),
-    retry=retry_if_exception_type((httpx.TimeoutException, httpx.HTTPStatusError)),
+    retry=retry_if_exception_type((httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadError)),
     reraise=True,
 )
 
@@ -56,6 +56,7 @@ class OpenRouterClient:
     _PRICE_PER_TOKEN: dict[str, float] = {
         "qwen/qwen3-8b": 1e-7,              # ~$0.10/1M tokens
         "deepseek/deepseek-v4-flash": 5e-7,  # ~$0.50/1M tokens (flash)
+        "deepseek/deepseek-v4-pro": 7e-7,    # ~$0.70/1M tokens (pro/full)
         "default": 5e-7,
     }
 
@@ -121,7 +122,7 @@ class OpenRouterClient:
     @staticmethod
     def extract_text(response: dict) -> str:
         """Extract assistant message content, stripping Qwen3 <think> tags."""
-        content: str = response["choices"][0]["message"]["content"]
+        content: str = response["choices"][0]["message"]["content"] or ""
         if "<think>" in content and "</think>" in content:
             content = content.split("</think>", 1)[-1].strip()
         return content

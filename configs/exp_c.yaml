@@ -1,0 +1,70 @@
+# ============================================================
+# Experiment C — High rank, high LR
+# ============================================================
+# 2×2 matrix position: r=64 × lr=2e-4
+# Expected: more capacity but may overfit / diverge at high LR.
+# Validates whether rank gain survives an aggressive LR.
+
+experiment:
+  id: "exp_c"
+  description: "LoRA r=64, α=128, lr=2e-4 — high-rank fast run"
+
+model:
+  name: "Qwen/Qwen3-8B"
+  dtype: "bfloat16"
+  attn_implementation: "flash_attention_2"
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+lora:
+  r: 64                      # ← high rank
+  lora_alpha: 128            # alpha = 2×r
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+training:
+  output_dir: "checkpoints/exp_c"
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  seed: 42
+  max_seq_length: 2048
+  logging_steps: 10
+  save_steps: 50
+  eval_steps: 50
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  generation:
+    temperature: 0.0
+    seed: 42
+    enable_thinking: false
+
+data:
+  train_file: "data/merged/train.jsonl"
+  eval_file: "data/merged/eval.jsonl"
+  eval_split: 0.05
+  chat_template: "qwen3"
+
+hardware:
+  target: "A100-80GB"
+  experiment_ok_on: "RTX-4090-24GB"

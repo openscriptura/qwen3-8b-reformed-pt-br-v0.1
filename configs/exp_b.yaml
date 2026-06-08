@@ -1,0 +1,69 @@
+# ============================================================
+# Experiment B — Low rank, low LR
+# ============================================================
+# 2×2 matrix position: r=16 × lr=1e-4
+# Expected: stable but underpowered. Useful to isolate LR effect.
+
+experiment:
+  id: "exp_b"
+  description: "LoRA r=16, α=32, lr=1e-4 — low-rank conservative"
+
+model:
+  name: "Qwen/Qwen3-8B"
+  dtype: "bfloat16"
+  attn_implementation: "flash_attention_2"
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+training:
+  output_dir: "checkpoints/exp_b"
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-4        # ← only difference from exp_a
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  seed: 42
+  max_seq_length: 2048
+  logging_steps: 10
+  save_steps: 50
+  eval_steps: 50
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  generation:
+    temperature: 0.0
+    seed: 42
+    enable_thinking: false
+
+data:
+  train_file: "data/merged/train.jsonl"
+  eval_file: "data/merged/eval.jsonl"
+  eval_split: 0.05
+  chat_template: "qwen3"
+
+hardware:
+  target: "A100-80GB"
+  experiment_ok_on: "RTX-4090-24GB"

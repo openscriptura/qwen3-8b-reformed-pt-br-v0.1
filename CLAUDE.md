@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **OpenScriptura** is an applied research pipeline to fine-tune open LLMs (starting with Qwen3-8B) with Protestant theological corpus. The first release target is `qwen3-8b-reformed-pt-br-v0.1` (Reformed theology, Brazilian Portuguese), evaluated on the CEFEAI benchmark.
 
-**Status:** Phase 0 (CEFEAI baseline) is **implemented**. The shared `scripts/utils/` layer and `scripts/00_cefeai_baseline.py` exist and run; all Phase-0 blocking items from `VALIDATION_REPORT.md` (M2–M12) are addressed. Phase 1–4 scripts (`01_`–`07_`) are **planned but not yet written**. The repo is **not a git repository** yet, so the manifest/commit-SHA reproducibility scheme in the design is still aspirational.
+**Status:** Phase 0 complete (baseline run: RR 4.7%, CB 19.6%). Phase 1 in progress — `01_build_tier_c.py` done (839 records), `02_build_tier_b.py` running (~2,554 pairs). `03_eda.py` written; `04_experiment.py`–`06_export.py` planned. Experiment configs A–D in `configs/`. The repo is a git repository (initialized, Apache 2.0 licensed, pushed to GitHub under the `openscriptura` org).
 
 ## Commands
 
@@ -24,17 +24,34 @@ python scripts/00_cefeai_baseline.py --benchmark rr --no-resume
 # Override OPENROUTER_MODEL_BASELINE from .env:
 python scripts/00_cefeai_baseline.py --model qwen/qwen3-8b --benchmark rr
 
-# Phase 1–4: NOT YET WRITTEN — these are the planned entry points:
-#   scripts/01_extract_tier_c.py   scripts/02_extract_tier_b.py
-#   scripts/03_confessional_judge.py   scripts/04_merge_dataset.py
-#   scripts/05_train.py   scripts/06_evaluate.py   scripts/07_cefeai_eval.py
+# Phase 1 — Dataset construction (IMPLEMENTED / IN PROGRESS)
+python scripts/01_build_tier_c.py --dry-run     # Tier C: confessions/catechisms → 839 records ✅
+python scripts/02_build_tier_b.py --dry-run     # Tier B: synthetic LLM-generated Q&A (running)
+python scripts/03_eda.py                        # EDA on all available tiers → reports/eda_report.html ✅
+
+# Phase 2 — Experiments (NOT YET WRITTEN — configs ready in configs/)
+python scripts/04_experiment.py --config configs/exp_a.yaml   # LoRA r=16 lr=2e-4
+python scripts/04_experiment.py --config configs/exp_b.yaml   # LoRA r=16 lr=1e-4
+python scripts/04_experiment.py --config configs/exp_c.yaml   # LoRA r=64 lr=2e-4
+python scripts/04_experiment.py --config configs/exp_d.yaml   # LoRA r=64 lr=1e-4 ← RECOMMENDED
+
+# Phase 3 — Final training + export (NOT YET WRITTEN)
+python scripts/05_train_final.py --config configs/exp_d.yaml
+python scripts/06_export.py --config configs/exp_d.yaml       # merge + GGUF Q4/Q5/Q8
 ```
 
 **Before running Phase 0 for real:** benchmark inputs must exist at `data/cefeai/rr_150.jsonl` and `data/cefeai/cb_1456.jsonl` (each line `{"id": ..., "prompt": ...}`). The `data/` directory is **not** in the repo — download from https://cefe.ai first. The script aborts (or warns under `--dry-run`) if a file is missing. Always run `--dry-run` first to confirm keys, model, and cost limit.
 
 Dev tooling (pinned in `requirements.txt`, configs not yet added):
 - Formatter/linter: `black` / `ruff`
-- Tests: `pytest` (no tests written yet)
+- Tests: `pytest` — two suites exist in `tests/`
+
+```bash
+# Run all tests (must be run from project root so sys.path resolves scripts/utils)
+cd scripts && python -m pytest ../tests/ -v && cd ..
+# Or set PYTHONPATH explicitly:
+$env:PYTHONPATH = "scripts"; pytest tests/ -v
+```
 
 ## Architecture
 
@@ -134,7 +151,7 @@ Per `VALIDATION_REPORT.md`, these gated `00_cefeai_baseline.py` and are now done
 - **M10/M11** tenacity retry + cost guardrail — `api_client.py:_post_json` + `cost_tracker.py`
 - **M12** `docs/THEOLOGICAL_STATEMENT.md` + `docs/PASTORAL_REVIEW_PROTOCOL.md` — present
 
-⚠️ **Security:** `.env.example` currently contains what look like **real** `OPENROUTER_API_KEY` and `HF_TOKEN` values, a populated `.env` exists, and there is **no `.gitignore`**. Before this repo is initialized as git / pushed, replace those with placeholders, add a `.gitignore` excluding `.env`, and rotate the exposed keys.
+⚠️ **Security:** `.env.example` may still contain real key values — verify it only has placeholders before any new contributors clone the repo. `.gitignore` is present and excludes `.env`.
 
 ## Technology Stack
 

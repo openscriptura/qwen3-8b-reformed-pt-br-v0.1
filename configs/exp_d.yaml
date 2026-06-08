@@ -1,0 +1,91 @@
+# ============================================================
+# Experiment D — High rank, low LR  ← RECOMMENDED CONFIG
+# ============================================================
+# 2×2 matrix position: r=64 × lr=1e-4
+# Per VALIDATION_REPORT Panel recommendation (config D).
+# Best expected balance of capacity and training stability.
+# This config will be promoted to final fine-tuning if eval_loss
+# and CEFEAI RR score are best in the 2×2 matrix.
+
+experiment:
+  id: "exp_d"
+  description: "LoRA r=64, α=128, lr=1e-4 — RECOMMENDED final config"
+  is_recommended: true
+
+model:
+  name: "Qwen/Qwen3-8B"
+  dtype: "bfloat16"
+  attn_implementation: "flash_attention_2"
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+lora:
+  r: 64
+  lora_alpha: 128            # alpha = 2×r (WCF Panel 1 recommendation)
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+training:
+  output_dir: "checkpoints/exp_d"
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4   # effective batch = 16
+  learning_rate: 1.0e-4            # ← lower, more stable
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  seed: 42
+  max_seq_length: 2048
+  logging_steps: 10
+  save_steps: 50
+  eval_steps: 50
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+
+  # CRITICAL: inference settings MUST match 00_cefeai_baseline.py
+  # Changing these breaks the Phase 0 ↔ Phase 4 comparison.
+  generation:
+    temperature: 0.0
+    seed: 42
+    enable_thinking: false
+
+data:
+  train_file: "data/merged/train.jsonl"
+  eval_file: "data/merged/eval.jsonl"
+  eval_split: 0.05
+  chat_template: "qwen3"
+
+# Final merge + export (used by 05_train_final.py and 06_export.py)
+export:
+  merge_adapter: true
+  output_dir: "models/qwen3-8b-reformed-pt-br-v0.1"
+  quantizations:
+    - "Q4_K_M"
+    - "Q5_K_M"
+    - "Q8_0"
+  push_to_hub: true
+  hub_repo: "openscriptura/qwen3-8b-reformed-pt-br-v0.1"
+
+hardware:
+  target: "A100-80GB"
+  experiment_ok_on: "RTX-4090-24GB"
+  # A100 notes:
+  #   - r=64 with 4 grad_accum steps uses ~28GB VRAM on A100
+  #   - Estimated time: ~2h for 3 epochs on 4,500-record corpus
+  #   - RunPod: use "Secure Cloud" A100 SXM4 80GB

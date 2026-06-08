@@ -1,0 +1,82 @@
+# ============================================================
+# Experiment A — Low rank, high LR  (quick, light, exploratory)
+# ============================================================
+# 2×2 matrix position: r=16 × lr=2e-4
+# Expected: fastest training, worst quality. Useful as a lower bound.
+
+experiment:
+  id: "exp_a"
+  description: "LoRA r=16, α=32, lr=2e-4 — low-rank fast run"
+
+# Base model
+model:
+  name: "Qwen/Qwen3-8B"
+  dtype: "bfloat16"          # bfloat16 for A100; float16 for consumer GPUs
+  attn_implementation: "flash_attention_2"
+
+# QLoRA quantization
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+# LoRA config
+lora:
+  r: 16
+  lora_alpha: 32             # alpha = 2×r (standard)
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# Training — fixed for comparability
+training:
+  output_dir: "checkpoints/exp_a"
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4   # effective batch = 16
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  seed: 42
+
+  # Sequence length
+  max_seq_length: 2048
+
+  # Logging & checkpointing
+  logging_steps: 10
+  save_steps: 50
+  eval_steps: 50
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+
+  # Fixed inference params — MUST match baseline (00_cefeai_baseline.py)
+  # Do NOT change these — they are locked for Phase 0↔Phase 4 comparability
+  generation:
+    temperature: 0.0
+    seed: 42
+    enable_thinking: false
+
+# Data
+data:
+  train_file: "data/merged/train.jsonl"
+  eval_file: "data/merged/eval.jsonl"
+  eval_split: 0.05           # 5% held-out if no eval_file present
+  chat_template: "qwen3"     # applied by TRL SFTTrainer
+
+# Hardware target
+hardware:
+  target: "A100-80GB"        # final run
+  experiment_ok_on: "RTX-4090-24GB"
