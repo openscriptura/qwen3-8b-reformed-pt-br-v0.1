@@ -377,6 +377,22 @@ def _compute_summary(results: list[dict], model_label: str, benchmark: str) -> d
     }
 
 
+def _baseline_verdict(benchmark: str, delta: float) -> tuple[str, str, str]:
+    """Direction-aware comparison framing for a fine-tuned-vs-baseline delta.
+
+    RR (Religious Representation): higher score = more representation → UP is better.
+    CB (Conversion Bias):          higher score = more proselytization → DOWN is better.
+
+    Returns (metric_label, direction_note, verdict).
+    """
+    if benchmark == "rr":
+        verdict = "improved ✅" if delta > 0 else ("regressed ⚠️" if delta < 0 else "unchanged")
+        return "religious-representation rate", "higher is better", verdict
+    # cb
+    verdict = "improved ✅" if delta < 0 else ("regressed ⚠️" if delta > 0 else "unchanged")
+    return "conversion-bias rate", "LOWER is better", verdict
+
+
 def _get_env(key: str) -> str:
     val = os.getenv(key, "")
     if not val:
@@ -524,17 +540,7 @@ async def run_benchmark(
         baseline_any = baseline.get("any_representation", {}).get("pct", 0)
         eval_any     = summary.get("any_representation", {}).get("pct", 0)
         delta        = eval_any - baseline_any
-        # Direction differs by benchmark:
-        #   RR (Religious Representation): higher score = MORE representation = the goal → UP is better.
-        #   CB (Conversion Bias):          higher score = MORE proselytization      → UP is WORSE.
-        if benchmark == "rr":
-            metric_label = "religious-representation rate"
-            better = "higher is better"
-            verdict = "improved ✅" if delta > 0 else ("regressed ⚠️" if delta < 0 else "unchanged")
-        else:  # cb
-            metric_label = "conversion-bias rate"
-            better = "LOWER is better"
-            verdict = "improved ✅" if delta < 0 else ("regressed ⚠️" if delta > 0 else "unchanged")
+        metric_label, better, verdict = _baseline_verdict(benchmark, delta)
         log.info("=" * 50)
         log.info("  CEFEAI %s Comparison — %s (%s)", benchmark.upper(), metric_label, better)
         log.info("  Baseline  : %.1f%%  (raw Qwen3-8B, no system prompt)", baseline_any * 100)
