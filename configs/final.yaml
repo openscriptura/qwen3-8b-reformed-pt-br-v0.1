@@ -1,0 +1,91 @@
+# ============================================================
+# Phase 3 — Final Training Config
+# ============================================================
+# Winner: exp_c (r=64, lr=2e-4) — best eval_all_loss 0.6527 @ step 350
+#
+# Adaptations vs Phase 2 experiments:
+#   - Full bf16 (no 4-bit QLoRA) — A100 80GB has sufficient VRAM (~16GB for 8B)
+#   - flash_attention_2 — install: pip install flash-attn --no-build-isolation
+#   - warmup_ratio 0.05 → 0.10 — softer ramp for aggressive lr=2e-4 on A100
+#   - epochs 3 → 5 — early stopping will halt at the real optimum
+#   - eval_steps/save_steps 50 → 25 — finer granularity (best was @350, want to catch it)
+#   - per_device_train_batch_size 1 → 4 — A100 can handle full bf16 + bs=4
+#   - gradient_accumulation_steps 16 → 4 — effective batch stays at 16
+#   - max_seq_length 2048 → 4096 — A100 memory allows longer context
+#   - save_total_limit 3 → 5 — keep more checkpoints for safety
+#   - early_stopping_patience: 5 — halt if eval_all_loss doesn't improve for 5 evals
+
+experiment:
+  id: "final"
+  description: "Final model — LoRA r=64, α=128, lr=2e-4 (exp_c winner, A100 full bf16)"
+
+model:
+  name: "Qwen/Qwen3-8B"
+  dtype: "bfloat16"
+  attn_implementation: "flash_attention_2"   # install: pip install flash-attn --no-build-isolation
+  # fallback: set to "eager" if flash-attn is not installed
+
+quantization:
+  enabled: false   # Full bf16 on A100 — no 4-bit needed. Set true to revert to QLoRA.
+  load_in_4bit: false
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+lora:
+  r: 64
+  lora_alpha: 128             # alpha = 2×r
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+training:
+  output_dir: "checkpoints/final"
+  num_train_epochs: 5
+  per_device_train_batch_size: 4      # A100 80GB handles full bf16 + bs=4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4     # effective batch = 16 (same as Phase 2)
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.10                 # doubled from 0.05 — softer ramp for lr=2e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  seed: 42
+  max_seq_length: 4096               # A100 can handle longer context
+  logging_steps: 10
+  save_steps: 25                     # finer granularity
+  eval_steps: 25
+  save_total_limit: 5
+  load_best_model_at_end: false      # unsafe with PEFT — saved manually in finally block
+  metric_for_best_model: "eval_all_loss"
+  early_stopping_patience: 5        # stop if no improvement for 5 consecutive evals
+  generation:
+    temperature: 0.0                 # CEFEAI comparability lock — inference only
+    seed: 42
+    enable_thinking: false
+
+data:
+  train_file: "data/merged/train.jsonl"
+  eval_file: "data/merged/eval.jsonl"
+  chat_template: "qwen3"
+
+export:
+  merged_dir: "checkpoints/final/merged"
+  gguf_dir: "checkpoints/final/gguf"
+  quantizations:
+    - "Q4_K_M"
+    - "Q5_K_M"
+    - "Q8_0"
+  hf_repo: "openscriptura/qwen3-8b-reformed-pt-br-v0.1"
+
+hardware:
+  target: "A100-80GB"
+  min_vram_gb: 40
