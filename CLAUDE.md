@@ -184,6 +184,15 @@ vastai create ssh-key (Get-Content $HOME\.ssh\id_rsa.pub)
 vastai create ssh-key "$(cat ~/.ssh/id_rsa.pub)"
 ```
 
+### 7. `flash_attn` not pre-installed on vast.ai PyTorch images
+**Problem:** All 4 experiment configs had `attn_implementation: "flash_attention_2"`. The `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel` image does not ship `flash_attn`. Training crashed after model download:
+```
+ImportError: FlashAttention2 has been toggled on, but it cannot be used ...
+the package flash_attn seems to be not installed.
+```
+**Fix:** Changed all configs (`exp_a/b/c/d.yaml`) to `attn_implementation: "eager"` — always available, no build step.  
+**Note:** `eager` is ~10–15% slower but produces identical model weights. For Phase 3 on A100 where training time matters, you can optionally install: `pip install flash-attn --no-build-isolation` (~10 min build).
+
 ### 6. `nohup` required for long training runs
 Always launch training with `nohup ... &` so it survives SSH disconnection:
 ```bash

@@ -12,7 +12,7 @@ experiment:
 model:
   name: "Qwen/Qwen3-8B"
   dtype: "bfloat16"          # bfloat16 for A100; float16 for consumer GPUs
-  attn_implementation: "flash_attention_2"
+  attn_implementation: "eager"          # flash_attn not pre-installed on vast.ai images
 
 # QLoRA quantization
 quantization:
