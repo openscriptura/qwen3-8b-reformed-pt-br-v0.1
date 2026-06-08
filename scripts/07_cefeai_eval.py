@@ -61,24 +61,25 @@ MAX_NEW_TOKENS  = 512     # same as baseline
 SEED            = 42      # torch seed for reproducibility
 SEMAPHORE_LIMIT = 10      # concurrent judge requests
 
-# Canonical Reformed PT-BR system prompt — FALLBACK ONLY.
-# The authoritative copy lives in the training data (every record's system
-# message). _load_canonical_system_prompt() reads it from train.jsonl so eval
-# replicates training conditions exactly. This literal is used only if the data
-# file is unavailable.
-_SYSTEM_PROMPT_FALLBACK = (
+# Reference copy of the Reformed PT-BR system prompt (documentation only — the
+# AUTHORITATIVE copy is read verbatim from the training data at runtime so eval
+# matches training conditions exactly). NEVER silently substitute this literal:
+# the simulation showed it differs from the real trained prompt, which would
+# cause a distribution shift and corrupt the locked CEFEAI metric.
+_SYSTEM_PROMPT_REFERENCE = (
     "Você é um assistente teológico reformado, treinado nas confissões protestantes históricas "
     "(Confissão de Westminster, Catecismo de Heidelberg, Cânones de Dort, Confissão Batista de 1689). "
     "Responda em português do Brasil, com precisão confessional e clareza pastoral."
 )
 
 
-def _load_canonical_system_prompt(log) -> str:
+def _load_canonical_system_prompt(log) -> str | None:
     """Read the exact system prompt the model was trained on, from train.jsonl.
 
-    Falls back to the literal above if the file or system message is missing.
-    Using the training-time prompt verbatim avoids a silent distribution shift
-    at inference (model trained on prompt A, evaluated on prompt B).
+    Returns the prompt string, or None if it cannot be loaded. The caller MUST
+    treat None as a hard error in sysprompt mode — we never silently substitute
+    a different prompt, because evaluating under a prompt the model wasn't
+    trained on (distribution shift) would invalidate the CEFEAI comparison.
     """
     train_file = PROJECT_ROOT / "data" / "merged" / "train.jsonl"
     try:
@@ -95,8 +96,7 @@ def _load_canonical_system_prompt(log) -> str:
                 break  # first record had no system message — stop scanning
     except (OSError, json.JSONDecodeError) as exc:
         log.warning("Could not read system prompt from training data (%s).", exc)
-    log.warning("Using FALLBACK system prompt — may not match training data exactly.")
-    return _SYSTEM_PROMPT_FALLBACK
+    return None
 
 # Judge prompts — identical to 00_cefeai_baseline.py
 _JUDGE_PROMPT_RR = """\
@@ -156,18 +156,22 @@ def load_local_model(model_path: Path):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Pin to a single GPU. On a multi-GPU box device_map="auto" shards the base,
+    # and merge_and_unload() (adapter path) would then fail with a cross-device
+    # error. {"": 0} == "auto" on a 1-GPU box.
+    device_map = {"": 0} if torch.cuda.is_available() else None
+
     # Check if this is a PEFT adapter (has adapter_config.json) or merged model
     is_adapter = (model_path / "adapter_config.json").exists()
     if is_adapter:
         log.info("Detected PEFT adapter — loading base model + adapter...")
-        import json as _json
-        adapter_cfg = _json.loads((model_path / "adapter_config.json").read_text())
+        adapter_cfg = json.loads((model_path / "adapter_config.json").read_text(encoding="utf-8"))
         base_name   = adapter_cfg.get("base_model_name_or_path", "Qwen/Qwen3-8B")
         log.info("Base model: %s", base_name)
         from peft import PeftModel
         base = AutoModelForCausalLM.from_pretrained(
             base_name,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
         )
@@ -177,7 +181,7 @@ def load_local_model(model_path: Path):
         log.info("Loading merged model in bf16...")
         model = AutoModelForCausalLM.from_pretrained(
             str(model_path),
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
         )
@@ -418,13 +422,19 @@ async def run_benchmark(
     judge_model: str,
     base_url: str,
     api_key: str,
-    cost_limit: float,
+    cost_tracker: CostTracker,
     log,
 ) -> None:
     benchmark_file = BENCHMARK_FILES[benchmark]
     if not benchmark_file.exists():
         log.error("Benchmark file not found: %s", benchmark_file)
         log.error("Download from https://cefe.ai and place at the path above.")
+        # Dry-run must stay offline-safe: validate everything else and skip this
+        # benchmark instead of hard-exiting (matches 00_cefeai_baseline.py).
+        if dry_run:
+            log.warning("[DRY-RUN] Skipping %s — benchmark file missing "
+                        "(would abort in a real run).", benchmark.upper())
+            return
         sys.exit(1)
 
     prompts = []
@@ -467,8 +477,9 @@ async def run_benchmark(
     responses = run_local_inference(model, tokenizer, remaining, system_prompt, log)
 
     # --- Async judge ---
+    # cost_tracker is shared across benchmarks (created once in main) so the
+    # COST_LIMIT_USD_PHASE4 budget is a single global cap, not per-benchmark.
     log.info("Running judge calls via OpenRouter...")
-    cost_tracker = CostTracker(limit_usd=cost_limit)
     semaphore    = asyncio.Semaphore(SEMAPHORE_LIMIT)
     api          = OpenRouterClient(api_key=api_key, base_url=base_url, log_raw_dir=log_raw_dir)
     model_label  = str(model_path)
@@ -607,9 +618,21 @@ Examples:
         sys.exit(1)
 
     use_system_prompt = not args.no_system_prompt
-    # Resolve the system prompt text from training data (Fix #6) — None in
-    # baseline-comparable mode.
-    system_prompt = _load_canonical_system_prompt(log) if use_system_prompt else None
+    # Resolve the system prompt verbatim from training data — None in
+    # baseline-comparable mode. In sysprompt mode, a missing/unreadable prompt
+    # is a HARD error: we must never evaluate under a prompt the model wasn't
+    # trained on (it would corrupt the locked CEFEAI comparison).
+    system_prompt = None
+    if use_system_prompt:
+        system_prompt = _load_canonical_system_prompt(log)
+        if system_prompt is None:
+            log.error(
+                "Could not load the canonical system prompt from "
+                "data/merged/train.jsonl. Upload the training data to this box, "
+                "or run with --no-system-prompt for the strict baseline-comparable "
+                "evaluation. Refusing to substitute a non-matching prompt."
+            )
+            sys.exit(1)
 
     print("=" * 64)
     print("  OpenScriptura — CEFEAI Phase 4 Re-evaluation")
@@ -638,6 +661,9 @@ Examples:
     if not args.dry_run:
         model, tokenizer = load_local_model(model_path)
 
+    # Single shared budget across all benchmarks in this invocation.
+    cost_tracker = CostTracker(limit_usd=cost_limit)
+
     benchmarks = ["rr", "cb"] if args.benchmark == "both" else [args.benchmark]
     for bm in benchmarks:
         log.info("--- Starting benchmark: %s ---", bm.upper())
@@ -653,7 +679,7 @@ Examples:
                 judge_model=judge,
                 base_url=base_url,
                 api_key=api_key,
-                cost_limit=cost_limit,
+                cost_tracker=cost_tracker,
                 log=log,
             )
         )

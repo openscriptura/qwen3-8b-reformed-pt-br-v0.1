@@ -62,7 +62,7 @@ def load_config(path: Path) -> dict:
 # Step 1+2+3: Merge adapter → base model
 # ---------------------------------------------------------------------------
 
-def merge_adapter(cfg: dict, adapter_path: Path) -> Path:
+def merge_adapter(cfg: dict, adapter_path: Path, force: bool = False) -> Path:
     """Load base model + LoRA adapter, merge, save merged model."""
     import torch
     from peft import PeftModel
@@ -70,9 +70,16 @@ def merge_adapter(cfg: dict, adapter_path: Path) -> Path:
 
     merged_dir = Path(cfg["export"]["merged_dir"])
     if merged_dir.exists() and any(merged_dir.iterdir()):
-        log.info("Merged model already exists at %s — skipping merge.", merged_dir)
-        log.info("  Delete the directory to force re-merge.")
-        return merged_dir
+        if force:
+            log.warning("Merged model exists at %s — --force-merge set, re-merging.", merged_dir)
+            shutil.rmtree(merged_dir)
+        else:
+            # Loud warning, not info: a stale merge from a DIFFERENT adapter would
+            # otherwise be silently reused/exported/pushed.
+            log.warning("Merged model already exists at %s — SKIPPING merge and "
+                        "reusing it. If the adapter changed, this is stale; pass "
+                        "--force-merge or delete the directory to re-merge.", merged_dir)
+            return merged_dir
 
     model_name = cfg["model"]["name"]
     log.info("=" * 60)
@@ -81,9 +88,15 @@ def merge_adapter(cfg: dict, adapter_path: Path) -> Path:
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
+    # Pin to a single GPU. With device_map="auto" on a multi-GPU box the base is
+    # sharded across devices, and merge_and_unload() then adds a LoRA delta on
+    # one device to a base weight on another → cross-device RuntimeError. {"": 0}
+    # keeps base + adapter co-resident (identical to "auto" on a 1-GPU box).
+    device_map = {"": 0} if torch.cuda.is_available() else None
+
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        device_map="auto",
+        device_map=device_map,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
     )
@@ -336,6 +349,8 @@ def main() -> None:
                         help="Path to llama.cpp repo (default: /workspace/llama.cpp)")
     parser.add_argument("--skip-gguf", action="store_true",
                         help="Skip GGUF conversion (merge only)")
+    parser.add_argument("--force-merge", action="store_true",
+                        help="Re-merge even if checkpoints/final/merged/ already exists")
     parser.add_argument("--push-to-hub", action="store_true",
                         help="Push merged model + GGUFs to HuggingFace Hub")
     parser.add_argument("--dry-run", action="store_true",
@@ -380,7 +395,7 @@ def main() -> None:
         return
 
     # Merge
-    merged_dir = merge_adapter(cfg, adapter_path)
+    merged_dir = merge_adapter(cfg, adapter_path, force=args.force_merge)
 
     gguf_paths = []
     if not args.skip_gguf:

@@ -60,6 +60,12 @@ log = get_logger("05_train_final")
 # AssertionError at the very start of training. This drop-in tracks the metric
 # itself and sets control.should_training_stop — no assertion, no best-model
 # reload required.
+#
+# Known limitation: callback state (best/waited) is in-memory, so a --resume
+# restarts the patience counter from zero. Consequence is mild (a resumed run may
+# go up to `patience` extra evals past the optimum); the best checkpoint is still
+# captured via results.json. Resume is rare here, so we keep the simple version
+# rather than serialising callback state.
 
 
 def _make_early_stopping_callback(metric_name: str, patience: int, min_delta: float = 0.0):
@@ -276,6 +282,26 @@ def apply_lora(model, cfg: dict, use_quantization: bool):
 # SFTConfig with early stopping
 # ---------------------------------------------------------------------------
 
+def _validate_checkpoint_cadence(t: dict) -> None:
+    """Warn if the best eval step might land on a step with no saved checkpoint.
+
+    06_export selects the checkpoint dir matching the best eval step. A checkpoint
+    exists only at multiples of save_steps; the best is found at a multiple of
+    eval_steps. So every eval step is guaranteed to be saved iff eval_steps is a
+    multiple of save_steps. Otherwise the best checkpoint may be absent and export
+    silently falls back to final/ (the last, worse state).
+    """
+    eval_steps = t.get("eval_steps")
+    save_steps = t.get("save_steps")
+    if eval_steps and save_steps and eval_steps % save_steps != 0:
+        log.warning(
+            "eval_steps (%d) is not a multiple of save_steps (%d): the best "
+            "checkpoint may not be saved on disk, and 06_export would fall back "
+            "to final/ (last state). Set save_steps to divide eval_steps.",
+            eval_steps, save_steps,
+        )
+
+
 def build_sft_config(cfg: dict) -> "SFTConfig":
     from trl import SFTConfig
 
@@ -343,6 +369,8 @@ def dry_run(cfg: dict) -> None:
     log.info("  Output dir     : %s", t["output_dir"])
     log.info("  Merged output  : %s", cfg["export"]["merged_dir"])
 
+    _validate_checkpoint_cadence(t)
+
     g = t.get("generation", {})
     log.info("  [CEFEAI lock]  : temperature=%s  seed=%s  enable_thinking=%s (eval only)",
              g.get("temperature"), g.get("seed"), g.get("enable_thinking"))
@@ -387,6 +415,8 @@ def run_training(cfg: dict, resume: bool) -> None:
     log.info("  Phase 3 Final Training: %s", exp_id)
     log.info("  %s", cfg["experiment"]["description"])
     log.info("=" * 60)
+
+    _validate_checkpoint_cadence(t)
 
     # Model + tokenizer
     model, tokenizer = load_model_and_tokenizer(cfg)
