@@ -4,6 +4,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Resolve project root from this file's location (scripts/utils/logger.py),
+# NOT the current working directory — so logs always land in <project>/logs/
+# regardless of where the entry-point script is launched from.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 def get_logger(script_name: str, level: str | None = None) -> logging.Logger:
     """Return a logger that writes to both stdout and logs/YYYYMMDD_<name>.log.
@@ -14,7 +19,7 @@ def get_logger(script_name: str, level: str | None = None) -> logging.Logger:
     log_level_str = level or os.getenv("LOG_LEVEL", "INFO")
     log_level = getattr(logging, log_level_str.upper(), logging.INFO)
 
-    logs_dir = Path("logs")
+    logs_dir = _PROJECT_ROOT / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = logs_dir / f"{datetime.now().strftime('%Y%m%d')}_{script_name}.log"

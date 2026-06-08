@@ -179,7 +179,7 @@ def build_lora_config(cfg: dict):
 #         renamed fields in TRL ≥0.12.
 # ---------------------------------------------------------------------------
 
-def build_sft_config(cfg: dict, resume: bool):
+def build_sft_config(cfg: dict):
     from trl import SFTConfig
 
     t = cfg["training"]
@@ -227,7 +227,10 @@ def build_sft_config(cfg: dict, resume: bool):
         report_to="none",               # no wandb/tensorboard by default
         dataloader_pin_memory=False,    # avoid issues on some Windows setups
         group_by_length=True,           # pack similar-length seqs → less padding
-        resume_from_checkpoint=resume,
+        # NOTE: resume is handled exclusively by trainer.train(resume_from_checkpoint=<path>)
+        # below. Do NOT set resume_from_checkpoint here — TrainingArguments expects an
+        # Optional[str] path, and passing a bool (True) makes the Trainer treat "True"
+        # as a checkpoint path and crash.
     )
 
 
@@ -380,7 +383,7 @@ def run_training(cfg: dict, resume: bool) -> None:
 
     # Fix #3: SFTConfig built directly from YAML — no TrainingArguments middleman.
     # Fix #4: eval_dataset is a dict → Trainer logs eval_B_loss, eval_C_loss, eval_all_loss.
-    sft_config = build_sft_config(cfg, resume)
+    sft_config = build_sft_config(cfg)
 
     trainer = SFTTrainer(
         model=model,
