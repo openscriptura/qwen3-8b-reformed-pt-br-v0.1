@@ -41,9 +41,9 @@ lora:
 training:
   output_dir: "checkpoints/exp_d"
   num_train_epochs: 3
-  per_device_train_batch_size: 4
-  per_device_eval_batch_size: 4
-  gradient_accumulation_steps: 4   # effective batch = 16
+  per_device_train_batch_size: 1    # reduced from 4 — OOM with eager attn at seq=2048 on RTX 4090
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 16  # effective batch = 16 (unchanged)
   learning_rate: 1.0e-4            # ← lower, more stable
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.05

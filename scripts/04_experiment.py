@@ -212,6 +212,9 @@ def build_sft_config(cfg: dict, resume: bool):
         # Use the combined 'all' eval split for best-model tracking
         eval_on_start=False,
         greater_is_better=False,        # lower eval_loss is better
+        # ── memory ─────────────────────────────────────────────────────────
+        gradient_checkpointing=True,    # recompute activations → ~40% less VRAM
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         # ── precision + reporting ───────────────────────────────────────────
         bf16=True,
         report_to="none",               # no wandb/tensorboard by default

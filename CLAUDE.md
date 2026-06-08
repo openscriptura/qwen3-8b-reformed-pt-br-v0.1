@@ -184,6 +184,16 @@ vastai create ssh-key (Get-Content $HOME\.ssh\id_rsa.pub)
 vastai create ssh-key "$(cat ~/.ssh/id_rsa.pub)"
 ```
 
+### 8. OOM on RTX 4090 with eager attention + batch_size=4 + seq_len=2048
+**Problem:** After switching to `eager` attention (fix #7), training crashed with CUDA OOM:
+```
+torch.OutOfMemoryError: Tried to allocate 3.92 GiB.
+GPU 0 has 23.52 GiB total capacity, 22.10 GiB in use.
+```
+Flash attention is memory-efficient (O(N) in sequence length); eager attention materialises the full O(N²) attention matrix. At `seq_len=2048` with `batch_size=4`, the attention matrices across 32 layers exhaust 24GB VRAM.  
+**Fix:** In all 4 configs: `per_device_train_batch_size: 1` (from 4) + `gradient_accumulation_steps: 16` (from 4) → effective batch size unchanged at 16. Also added `gradient_checkpointing: True` to `SFTConfig` in `04_experiment.py` (recomputes activations on backward pass, ~40% VRAM reduction, ~20% slower).  
+**Note:** Effective batch size (train_batch × grad_accum = 16) is preserved, so hyperparameter comparisons remain valid.
+
 ### 7. `flash_attn` not pre-installed on vast.ai PyTorch images
 **Problem:** All 4 experiment configs had `attn_implementation: "flash_attention_2"`. The `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel` image does not ship `flash_attn`. Training crashed after model download:
 ```
