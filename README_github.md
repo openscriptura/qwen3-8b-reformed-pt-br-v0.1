@@ -24,18 +24,18 @@ OpenScriptura is an open-source applied research project that fine-tunes open LL
 ## Scientific Motivation
 
 ```
-Base models — CEFEAI Religious Representation (May 2026, 150 questions):
+Base models — CEFEAI Religious Representation (June 2026, 150 questions):
 
   Grok 4.20        ████░░░░░░░░░░░░░░░░  29.3% Any Representation
   Mistral Large    ████░░░░░░░░░░░░░░░░  23.3%
   GPT-5.4          ███░░░░░░░░░░░░░░░░░  17.3%
-  Qwen3-8B base    █░░░░░░░░░░░░░░░░░░░  ~6.0%   ← our starting point
+  Qwen3-8B base    █░░░░░░░░░░░░░░░░░░░   4.7%   ← our measured baseline (2026-06-07)
   Claude Opus 4.7  █░░░░░░░░░░░░░░░░░░░   4.0%
   Llama 4 Scout    ░░░░░░░░░░░░░░░░░░░░   3.3%
 
   Predominantly Religious: 0% across all 27 models tested.
 
-  OpenScriptura v0.1 target:  ████████████░░░░░░░░  > 60%
+  OpenScriptura v0.1 target:  ████████████░░░░░░░░  > 60%  (+55.3 pp from baseline)
 ```
 
 ---
@@ -61,9 +61,9 @@ OpenScriptura is designed to serve the full breadth of Protestant Christianity. 
 
 ## Published Models
 
-| Model | Base | Tradition | Language | CEFEAI RR | Download |
-|---|---|---|---|---|---|
-| `qwen3-8b-reformed-pt-br-v0.1` | Qwen3-8B | Reformed | PT-BR | 🔄 pending | [HF Hub](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) |
+| Model | Base | Tradition | Language | CEFEAI RR (baseline) | CEFEAI RR (fine-tuned) | Download |
+|---|---|---|---|---|---|---|
+| `qwen3-8b-reformed-pt-br-v0.1` | Qwen3-8B | Reformed | PT-BR | 4.7% (measured) | 🔄 training | [HF Hub](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) |
 | `qwen3-8b-lutheran-en-v0.1` | Qwen3-8B | Lutheran | EN | 📋 planned | — |
 | `gpt-oss-20b-v1.0` | GPT-OSS 20B | Multi-tradition | Multilingual | 📋 planned | — |
 
@@ -172,52 +172,67 @@ python scripts/00_cefeai_baseline.py --model qwen/qwen3-8b --benchmark cb
 ### Build the dataset (Reformed PT-BR v0.1)
 
 ```bash
-python scripts/01_extract_tier_c.py   --tradition reformed
-python scripts/02_extract_tier_b.py   --tradition reformed --lang pt-BR
-python scripts/03_confessional_judge.py --tradition reformed
-python scripts/04_merge_dataset.py    --tradition reformed --seed 42
+# Tier C — confessions/catechisms (free, no API)
+python scripts/01_build_tier_c.py      # → data/tier_c/tier_c.jsonl (839 records)
+
+# Tier B — synthetic Q&A via DeepSeek API (~$3.50)
+python scripts/02_build_tier_b.py      # → data/tier_b/tier_b.jsonl (2,129 records)
+
+# EDA — validate corpus quality
+python scripts/03_eda.py               # → reports/eda_report.html
+
+# Merge into train/eval splits (stratified 95/5)
+python scripts/merge_dataset.py        # → data/merged/train.jsonl (2,873) + eval.jsonl (151)
 ```
 
-### Fine-tuning
+### Run controlled experiments (Phase 2)
 
 ```bash
-# Free validation on Kaggle
-python scripts/05_train.py --config configs/exp_d.yaml --tradition reformed --samples 500
+# Find GPU and launch all 4 configs (D→C→B→A) on vast.ai RTX 4090:
+python scripts/vastai_run_experiments.py --search
+python scripts/vastai_run_experiments.py --config configs/exp_d.yaml --all-configs --offer-id <ID> --wait
+```
 
-# Full run — RunPod Secure A100
-python scripts/05_train.py --config configs/exp_d.yaml --tradition reformed --full
+### Final fine-tuning (Phase 3)
+
+```bash
+# Full run — A100 80GB (vast.ai or RunPod)
+python scripts/05_train_final.py --config configs/exp_d.yaml   # write after Phase 2
+python scripts/06_export.py      --config configs/exp_d.yaml   # GGUF Q4/Q5/Q8 + HF push
 ```
 
 ---
 
 ## Dataset Schema (v1.0)
 
-`tradition` and `language` are first-class fields. The same schema works for any Protestant tradition in any language:
+`tradition` and `lang` (BCP 47) are first-class fields. Training records use chat format — this is the schema used in `data/tier_*/*.jsonl`:
 
 ```json
 {
-  "id":                 "os_reformed_c_wsc_001",
-  "instruction":        "What is justification by faith alone?",
-  "input":              "",
-  "output":             "Justification is the forensic act by which God declares the sinner righteous...",
-  "source":             "westminster_sc_q033",
-  "tier":               "C",
-  "tradition":          "reformed",
-  "confessional_ref":   "WCF_11.1",
-  "language":           "pt-BR",
-  "difficulty":         "intermediate",
-  "annotation_model":   "deepseek-v4-flash",
-  "validated_by":       "gemini-flash-2",
-  "confidence":         0.94,
-  "confessional_score": 0.91,
-  "dataset_version":    "v1.0",
-  "created_at":         "2026-06-07"
+  "id":               "openscriptura-reformed-pt-0001",
+  "version":          "1.0",
+  "tradition":        "reformed",
+  "lang":             "pt-BR",
+  "tier":             "C",
+  "source":           "wcf",
+  "sha256":           "<SHA-256 over messages + tradition + lang>",
+  "messages": [
+    {"role": "system",    "content": "<canonical PT-BR Reformed system prompt>"},
+    {"role": "user",      "content": "<question>"},
+    {"role": "assistant", "content": "<answer>"}
+  ],
+  "confessional_refs": ["WCF 11.1", "WCF 11.2"],
+  "quality_score":    96,
+  "reviewed_by":      "auto",
+  "created_at":       "2026-06-07T00:00:00Z"
 }
 ```
 
+> **Key:** use `lang` (short form, not `language`) — matches `content_hash()` in `scripts/utils/hash.py`. Use `messages` (chat format), not `question`/`answer`.
+
 `tradition` values: `reformed` · `lutheran` · `anglican` · `baptist` · `methodist` · `pentecostal` · `congregationalist`
 
-`language` follows BCP 47: `pt-BR` · `en` · `es` · `de` · `fr` · etc.
+`lang` follows BCP 47: `pt-BR` · `en` · `es` · `de` · `fr` · etc.
 
 ---
 
@@ -257,7 +272,7 @@ training:
 
 ```
 Phase 1 — Reformed Foundation
-  v0.1  Qwen3-8B    · Reformed  · PT-BR     ← we are here
+  v0.1  Qwen3-8B    · Reformed  · PT-BR     ← 🔄 Phase 2 experiments running
   v0.2  GPT-OSS 20B · Reformed  · PT-BR+EN
   v0.3  Gemma 4 31B · Reformed  · multilingual
 

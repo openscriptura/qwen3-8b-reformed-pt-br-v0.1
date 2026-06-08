@@ -98,17 +98,18 @@ Cost: **$0.7173** · Model: `qwen/qwen3-8b` · N=1,456 (10 originally skipped, r
 > **Reproducibility:** Original PDFs preserved at `data/sources/confessions/` alongside extracted `.txt` files. Manifested with SHA-256 in `data/sources/manifest.json`.
 
 ### Tier B — Synthetic Data (API-generated)
-**Status:** ⏳ Script not yet written (`02_build_tier_b.py`)
+**Status:** ✅ **Complete** — 2,129 unique records in `data/tier_b/tier_b.jsonl`
 
-Sources: Spurgeon sermons (quality score ≥ 93), Monergismo Reformed ebooks, WCF Q&A expansion
+**Script: `02_build_tier_b.py`** ✅
+- Generator: `deepseek/deepseek-v4-flash`
+- Judge/filter: `deepseek/deepseek-v4-flash` (same model — self-grading tradeoff accepted for v0.1)
+- Actual output: **2,129 records** from 1,277/1,277 chunks (180 sources)
+- Quality threshold: ≥ 93/100 · Mean score: **96.1** · Min: **93.0**
+- Acceptance rate: **~54%** (46% rejected below threshold or parse errors)
+- Total cost: **~$3.50** across multiple resume runs
+- Chunk-level checkpointing: `data/tier_b/done_chunks.txt` (1,277 entries)
 
-**Script: `02_build_tier_b.py`** ⏳
-- Generator: `deepseek/deepseek-v4-flash` (12% religious representation — best available)
-- Annotator/filter: `deepseek/deepseek-v4-pro` (highest quality judge)
-- Target: ~3,000–4,000 Q&A pairs
-- Quality threshold: score ≥ 93 (M7 rubric: 40pts theology + 20pts pastoral clarity + 20pts PT-BR + 20pts no-hallucination)
-- Confessional score threshold: ≥ 0.85 (M13 rubric)
-- Cost: **~$1**
+> **Lesson learned:** Resume mechanism initially used record-level SHA-256 dedup, which failed because `temperature=0.7` generates different content each run. Fixed by adding chunk-level `done_chunks.txt` checkpoint. Chunks are marked done immediately after processing regardless of acceptance.
 
 #### Source Material for Tier B
 
@@ -184,46 +185,61 @@ All training records use this schema. `lang` (BCP 47, short form) and `messages`
 ---
 
 ## Phase 2 — EDA + Controlled Experiments (Week 2)
-**Status:** ⏳ Awaiting Phase 1 completion.
-**Goal:** Validate data quality before committing GPU budget.
+**Status:** 🔄 **In progress** — 4 experiments running on vast.ai instance 40077545 (Denmark RTX 4090, $0.455/hr).
 
-### Script: `03_eda.py`
-- Length distribution of Q&A pairs
-- Tier breakdown visualization
-- Confessional reference coverage map
-- Deduplication report
-- Output: `reports/eda_report.html`
+### Script: `03_eda.py` ✅
+- Output: `reports/eda_report.html` + `reports/eda_report.md`
+- Results: 2,968 records · 0 duplicates · 99.5% confessional refs · Tier B mean score 96.1
 
-### 4 Controlled Experiments (2×2 matrix)
-Run on **Vast.ai RTX 4090** (~$0.35/hr):
+### Script: `merge_dataset.py` ✅
+- Stratified 95/5 split by tier (seed=42, deterministic)
+- Output: `data/merged/train.jsonl` (2,873) + `data/merged/eval.jsonl` (151)
+- `data/merged/manifest.json` with SHA-256 file hashes
+- **Note:** `data/` is gitignored — must upload to GPU instance manually via `scp`
 
-| Experiment | LR | Rank | Note |
-|---|---|---|---|
-| A | 2e-4 | 32 | Baseline LoRA |
-| B | 2e-4 | 64 | More capacity |
-| C | 1e-4 | 32 | More conservative |
-| **D** | **1e-4** | **64** | **Recommended (Config D)** |
+### 4 Controlled Experiments (2×2 matrix) 🔄
+Run on **vast.ai RTX 4090** ($0.455/hr, Denmark, CUDA 13.1):
 
-**Script: `04_experiment.py`** — parameterized, runs any of A/B/C/D
+| Config | r | α | LR | Est. time | Note |
+|--------|---|---|----|-----------|------|
+| A | 16 | 32 | 2e-4 | ~1.5h | Lower bound |
+| B | 16 | 32 | 1e-4 | ~1.5h | Conservative low-rank |
+| C | 64 | 128 | 2e-4 | ~2.0h | High-rank aggressive |
+| **D** | **64** | **128** | **1e-4** | **~2.0h** | **RECOMMENDED — runs first** |
 
-QLoRA config (Config D):
-```yaml
-base_model: Qwen/Qwen3-8B
-lora_r: 64
-lora_alpha: 128    # canonical: 2 × lora_r (see VALIDATION_REPORT.md M1)
-lora_dropout: 0.05
-learning_rate: 1e-4
-batch_size: 4
-gradient_accumulation_steps: 4
-num_epochs: 3
-max_seq_length: 2048
-seed: 42
-bf16: true
-target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+**Script: `04_experiment.py`** ✅ — YAML-driven, all 4 configs, `--dry-run` + `--resume`
+
+Key design decisions validated by 6×77 PhD panels:
+- `SFTConfig` built directly from YAML (no `TrainingArguments` middleman)
+- Chat template applied upfront → `text` column (not `formatting_func`)
+- `eval_dataset` as dict → logs `eval_B_loss`, `eval_C_loss`, `eval_all_loss` separately
+- Overlong records tokenized + dropped before training (not silently truncated)
+- `prepare_model_for_kbit_training()` handles `enable_input_require_grads()` internally
+
+**vast.ai automation: `scripts/vastai_run_experiments.py`** ✅
+- Search, launch, monitor, destroy instances via CLI
+- `--all-configs` runs D→C→B→A sequentially with `nohup`
+- `--wait` polls until instance reaches `running` status
+
+Cost: ~7h × $0.455 = **~$3.19** (all 4 experiments)
+
+#### vast.ai Instance Setup (required on each new instance)
+```bash
+# Fix bitsandbytes CUDA mismatch (CUDA 12.4 container on CUDA 13.x host):
+ln -sf /usr/local/cuda-12.4/targets/x86_64-linux/lib/libnvJitLink.so.12 \
+       /usr/local/cuda-12.4/targets/x86_64-linux/lib/libnvJitLink.so.13
+echo "/usr/local/cuda-12.4/targets/x86_64-linux/lib" > /etc/ld.so.conf.d/cuda124.conf && ldconfig
+export LD_LIBRARY_PATH=/usr/local/cuda-12.4/targets/x86_64-linux/lib:$LD_LIBRARY_PATH
+
+# Install core deps (skip unsloth for Phase 2):
+pip install transformers==4.51.0 trl==0.12.0 peft==0.13.0 bitsandbytes \
+  datasets==3.2.0 pyyaml==6.0.2 python-dotenv==1.0.1 scipy==1.14.1 \
+  sentencepiece==0.2.0 tokenizers==0.21.0 tenacity==9.0.0 httpx==0.27.0 jsonlines==4.0.0
+
+# Upload data from local machine:
+scp -P <port> -i ~/.ssh/id_rsa data/merged/train.jsonl root@<host>:/workspace/openscriptura/data/merged/
+scp -P <port> -i ~/.ssh/id_rsa data/merged/eval.jsonl  root@<host>:/workspace/openscriptura/data/merged/
 ```
-
-Cost per experiment: **~$1.25** (Vast.ai RTX 4090 × ~3.5h)  
-Total 4 experiments: **~$5**
 
 ---
 
@@ -285,10 +301,10 @@ C:\tmp\openScriptura\
 │
 ├── README_github.md              ✅ published
 ├── README_huggingface.md         ✅ published
-├── IMPLEMENTATION_PLAN.md        ✅ this file
+├── IMPLEMENTATION_PLAN.md        ✅ this file (updated 2026-06-08)
 ├── CONTRIBUTING.md               ✅ present
 ├── LICENSE                       ✅ Apache 2.0
-├── requirements.txt              ✅ pinned
+├── requirements.txt              ✅ pinned (unsloth==2025.3.19)
 │
 ├── scripts/
 │   ├── utils/                    ✅ shared infrastructure
@@ -299,15 +315,17 @@ C:\tmp\openScriptura\
 │   │   ├── progress.py           ✅ ProgressBar (TTY-aware)
 │   │   └── report.py             ✅ generate_all_reports()
 │   ├── 00_setup_data.py          ✅ data staging + audit
-│   ├── 00_cefeai_baseline.py     ✅ implemented + run
+│   ├── 00_cefeai_baseline.py     ✅ implemented + run (RR 4.7%, CB 19.6%)
 │   ├── 01_build_tier_c.py        ✅ 839 records produced
-│   ├── 02_build_tier_b.py        ⏳ not yet written
-│   ├── 03_eda.py                 ⏳ not yet written
-│   ├── 04_experiment.py          ⏳ not yet written
+│   ├── 02_build_tier_b.py        ✅ 2,129 records produced
+│   ├── 03_eda.py                 ✅ reports/eda_report.html produced
+│   ├── merge_dataset.py          ✅ train.jsonl (2,873) + eval.jsonl (151)
+│   ├── 04_experiment.py          ✅ QLoRA training, YAML-driven, 4 configs
+│   ├── vastai_run_experiments.py ✅ vast.ai instance automation
 │   ├── 05_train_final.py         ⏳ not yet written
 │   └── 06_export.py              ⏳ not yet written
 │
-├── data/
+├── data/  (gitignored — not in repo)
 │   ├── cefeai/
 │   │   ├── rr_150.jsonl          ✅ 150 prompts
 │   │   └── cb_1456.jsonl         ✅ 1,456 prompts
@@ -317,20 +335,36 @@ C:\tmp\openScriptura\
 │   │   ├── monergismo/           ✅ 289 PDFs / 34 authors (5 excluded)
 │   │   └── manifest.json         ✅ SHA-256 index of all sources
 │   ├── tier_a/                   ⏳ pending pastoral council
-│   ├── tier_b/                   ⏳ pending 02_build_tier_b.py
-│   └── tier_c/
-│       ├── tier_c.jsonl          ✅ 839 records
-│       └── manifest.json         ✅
+│   ├── tier_b/
+│   │   ├── tier_b.jsonl          ✅ 2,129 records
+│   │   ├── manifest.json         ✅
+│   │   └── done_chunks.txt       ✅ 1,277 chunk checkpoints
+│   ├── tier_c/
+│   │   ├── tier_c.jsonl          ✅ 839 records
+│   │   └── manifest.json         ✅
+│   └── merged/
+│       ├── train.jsonl           ✅ 2,873 records (B:2076 + C:797)
+│       ├── eval.jsonl            ✅ 151 records (B:109 + C:42)
+│       └── manifest.json         ✅ SHA-256 + tier breakdown
 │
 ├── configs/
-│   └── exp_d.yaml                ⏳ not yet written
+│   ├── exp_a.yaml                ✅ r=16 lr=2e-4
+│   ├── exp_b.yaml                ✅ r=16 lr=1e-4
+│   ├── exp_c.yaml                ✅ r=64 lr=2e-4
+│   └── exp_d.yaml                ✅ r=64 lr=1e-4 (RECOMMENDED)
+│
+├── checkpoints/  (gitignored)
+│   ├── exp_a/                    ⏳ training
+│   ├── exp_b/                    ⏳ training
+│   ├── exp_c/                    ⏳ training
+│   └── exp_d/                    🔄 training (first)
 │
 ├── tests/
 │   ├── test_cost_tracker.py      ✅
 │   └── test_hash.py              ✅
 │
 ├── results/                      ✅ baseline results present (RR + CB, 4 files each)
-├── reports/                      ⏳ generated by 03_eda.py
+├── reports/                      ✅ eda_report.html + eda_report.md
 │
 └── docs/
     ├── THEOLOGICAL_STATEMENT.md  ✅ present
@@ -359,11 +393,12 @@ The model does NOT blend traditions — a Reformed model speaks Reformed only.
 | Item | Platform | Cost |
 |---|---|---|
 | Phase 0: CEFEAI baseline ✅ | OpenRouter | **$0.7902** (RR $0.0729 + CB $0.7173) |
-| Phase 1: Dataset Tier B | DeepSeek API | ~$1.00 |
-| Phase 2: 4 experiments | Vast.ai RTX 4090 | ~$5.00 |
-| Phase 3: Final training | RunPod A100 | ~$4.28 |
+| Phase 1: Dataset Tier B ✅ | DeepSeek API | **~$3.50** (actual; planned $1 — 3.5× over budget due to resume issues) |
+| Phase 2: 4 experiments 🔄 | Vast.ai RTX 4090 | **~$3.19** (actual: 7h × $0.455/hr) |
+| Phase 3: Final training | A100 80GB | ~$7.20 (4h × $1.80/hr — RunPod or vast.ai) |
+| Phase 4: CEFEAI re-eval | OpenRouter | ~$0.79 (same as baseline) |
 | Misc | — | ~$0.50 |
-| **Total (one-time)** | | **~$11–15** |
+| **Total (one-time)** | | **~$16–18** (slightly over $15 budget) |
 | HF PRO (demo + ZeroGPU) | HuggingFace | **$9/month** |
 
 ---
@@ -385,15 +420,33 @@ The model does NOT blend traditions — a Reformed model speaks Reformed only.
 ## Immediate Next Actions
 
 ```
-▶  Step 1 — Phase 0 baseline ✅ COMPLETE
-   RR: 4.7% Any Representation (n=150, $0.07)
-   CB: 19.6% Any Bias (n=1456, $0.72)
+✅  Phase 0 — CEFEAI baseline COMPLETE
+    RR: 4.7% Any Representation (n=150, $0.07)
+    CB: 19.6% Any Bias (n=1456, $0.72)
 
-▶  Step 2 — Write 02_build_tier_b.py
-   Synthetic Q&A from Spurgeon + Monergismo via DeepSeek API
-   Cost: ~$1  |  Output: data/tier_b/tier_b.jsonl (~3,000–4,000 records)
+✅  Phase 1 — Dataset construction COMPLETE
+    Tier C: 839 records (confessions/catechisms, $0)
+    Tier B: 2,129 records (synthetic, ~$3.50)
+    Merged: train.jsonl (2,873) + eval.jsonl (151), seed=42
 
-▶  Step 3 — Write 03_eda.py + run EDA
-   Validate corpus quality before GPU spend
-   Cost: $0  |  Output: reports/eda_report.html
+🔄  Phase 2 — Experiments RUNNING
+    vast.ai instance 40077545 (ssh9.vast.ai:37544)
+    Configs D→C→B→A sequentially, nohup PID 1844
+    Monitor: ssh -p 37544 root@ssh9.vast.ai 'tail -f /workspace/training*.log'
+    Expected completion: ~7h from 13:28 UTC 2026-06-08
+
+▶  Step next — When Phase 2 completes:
+    1. scp checkpoints/exp_*/results.json from vast.ai
+    2. Compare eval_all_loss (+ eval_B_loss, eval_C_loss) across A/B/C/D
+    3. Select winner config (expected: D)
+    4. Destroy vast.ai instance: vastai destroy instance 40077545
+
+▶  Step after — Phase 3: Write 05_train_final.py + 06_export.py
+    Platform: A100 80GB (vast.ai or RunPod, ~$1.80/hr)
+    05_train_final.py: full run with winning config
+    06_export.py: merge adapter → GGUF Q4/Q5/Q8 → push to HuggingFace
+
+▶  Step after — Phase 4: Write 07_cefeai_eval.py
+    Same protocol as 00_cefeai_baseline.py (temperature=0.0, seed=42, enable_thinking=False)
+    Target: >60% Any Representation (vs 4.7% baseline)
 ```

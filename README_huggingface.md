@@ -29,9 +29,9 @@ OpenScriptura demonstrates that targeted fine-tuning can change this: transformi
 
 ## Models
 
-| Model | Base | Tradition | Language | Status | CEFEAI RR |
-|---|---|---|---|---|---|
-| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 In development | — |
+| Model | Base | Tradition | Language | Status | CEFEAI RR (baseline) | CEFEAI RR (fine-tuned) |
+|---|---|---|---|---|---|---|
+| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 Phase 2 experiments | **4.7%** (measured 2026-06-07) | pending |
 | qwen3-8b-lutheran-en-v0.1 | Qwen3-8B | Lutheran | EN | 📋 Planned | — |
 | qwen3-8b-anglican-en-v0.1 | Qwen3-8B | Anglican | EN | 📋 Planned | — |
 | gpt-oss-20b-v1.0 | GPT-OSS 20B | Multi-tradition | Multilingual | 📋 Planned | — |
@@ -44,7 +44,7 @@ Model naming: `openscriptura/{base}-{tradition}-{lang}-{version}`
 
 | Dataset | Tradition | Language | Examples | Status |
 |---|---|---|---|---|
-| [reformed-theology-v1](https://huggingface.co/datasets/openscriptura/reformed-theology-v1) | Reformed | PT-BR | ~6,000 | 🔄 In development |
+| [reformed-theology-v1](https://huggingface.co/datasets/openscriptura/reformed-theology-v1) | Reformed | PT-BR | **3,024** (839 Tier C + 2,129 Tier B + Tier A pending) | 🔄 Phase 2 experiments |
 | lutheran-theology-v1 | Lutheran | EN | — | 📋 Planned |
 | anglican-theology-v1 | Anglican | EN | — | 📋 Planned |
 
