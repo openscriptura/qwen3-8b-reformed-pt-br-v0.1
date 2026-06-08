@@ -63,11 +63,21 @@ OpenScriptura is designed to serve the full breadth of Protestant Christianity. 
 
 | Model | Base | Tradition | Language | CEFEAI RR (baseline) | CEFEAI RR (fine-tuned) | Download |
 |---|---|---|---|---|---|---|
-| `qwen3-8b-reformed-pt-br-v0.1` | Qwen3-8B | Reformed | PT-BR | 4.7% (measured) | 🔄 training | [HF Hub](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) |
+| `qwen3-8b-reformed-pt-br-v0.1` | Qwen3-8B | Reformed | PT-BR | 4.7% (v1, no system prompt) | 🔄 Phase 3 pending | [HF Hub](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) |
 | `qwen3-8b-lutheran-en-v0.1` | Qwen3-8B | Lutheran | EN | 📋 planned | — |
 | `gpt-oss-20b-v1.0` | GPT-OSS 20B | Multi-tradition | Multilingual | 📋 planned | — |
 
 Model naming convention: `openscriptura/{base}-{tradition}-{lang}-{version}`
+
+**Status:** dataset built (2,968 records) · 4-config LoRA sweep complete (winner **r=64, lr=2e-4**) · Phase 3 final training + GGUF export scripts written · evaluation upgraded to **protocol v2** (see below).
+
+---
+
+## Evaluation Protocol (v1 → v2)
+
+The original baseline (v1) measured raw Qwen3-8B with **no system prompt** (RR 4.7%, CB 19.6%). The fine-tuned model is trained and deployed **with** a Reformed system prompt — so comparing fine-tuned-with-prompt against baseline-without-prompt would conflate two effects (the fine-tuning *and* simply telling a model it's Reformed).
+
+**Protocol v2** fixes this by evaluating **both** the raw baseline and the fine-tuned model with the *same* committed system prompt (`configs/system_prompt.txt`). The only thing that differs between the two runs is the model weights — which is exactly what we want to measure. This costs an extra baseline re-run (~$0.30, ~2h) and a harness refactor, accepted because the project's headline claim depends on the comparison being valid. The v1 numbers are preserved for `--no-system-prompt` runs. *(Expect the v2 RR baseline to be well above 4.7% — a prompted raw model represents religion far more than an unprompted one.)*
 
 ---
 
@@ -164,9 +174,11 @@ cp .env.example .env
 ### Run CEFEAI baseline
 
 ```bash
-# Cost: ~$0.29 | Time: ~2h
-python scripts/00_cefeai_baseline.py --model qwen/qwen3-8b --benchmark rr
-python scripts/00_cefeai_baseline.py --model qwen/qwen3-8b --benchmark cb
+# Protocol v2 (default — system prompt on, the comparable baseline). ~$0.30 | ~2h
+python scripts/00_cefeai_baseline.py --benchmark both
+
+# Protocol v1 (legacy — no system prompt; reproduces the original 4.7% / 19.6%)
+python scripts/00_cefeai_baseline.py --benchmark both --no-system-prompt
 ```
 
 ### Build the dataset (Reformed PT-BR v0.1)
@@ -185,20 +197,27 @@ python scripts/03_eda.py               # → reports/eda_report.html
 python scripts/merge_dataset.py        # → data/merged/train.jsonl (2,873) + eval.jsonl (151)
 ```
 
-### Run controlled experiments (Phase 2)
+### Run controlled experiments (Phase 2 — complete)
 
 ```bash
-# Find GPU and launch all 4 configs (D→C→B→A) on vast.ai RTX 4090:
+# 2×2 LoRA sweep on vast.ai RTX 4090. Winner: exp_c (r=64, lr=2e-4).
 python scripts/vastai_run_experiments.py --search
-python scripts/vastai_run_experiments.py --config configs/exp_d.yaml --all-configs --offer-id <ID> --wait
+python scripts/vastai_run_experiments.py --config configs/exp_c.yaml --all-configs --wait
+# Chained runs: put `sleep 30` between configs so the GPU frees between processes.
 ```
 
-### Final fine-tuning (Phase 3)
+### Final fine-tuning + export (Phase 3) — A100 80GB
 
 ```bash
-# Full run — A100 80GB (vast.ai or RunPod)
-python scripts/05_train_final.py --config configs/exp_d.yaml   # write after Phase 2
-python scripts/06_export.py      --config configs/exp_d.yaml   # GGUF Q4/Q5/Q8 + HF push
+python scripts/05_train_final.py --config configs/final.yaml   # full-bf16 LoRA, early stopping
+python scripts/06_export.py      --config configs/final.yaml --push-to-hub   # merge best ckpt + GGUF Q4/Q5/Q8
+```
+
+### Re-evaluate on CEFEAI (Phase 4)
+
+```bash
+# v2 (system prompt) — compares against the v2 baseline above
+python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both
 ```
 
 ---
@@ -239,32 +258,37 @@ python scripts/06_export.py      --config configs/exp_d.yaml   # GGUF Q4/Q5/Q8 +
 ## Fine-tuning Configuration
 
 ```yaml
-# configs/exp_d.yaml — default (OpenMed config D)
+# configs/final.yaml — Phase 3 (winner from the 2×2 sweep: exp_c)
 model:
   name: Qwen/Qwen3-8B
-  load_in_4bit: true
-  bnb_4bit_quant_type: nf4
-  bnb_4bit_use_double_quant: true
+  attn_implementation: flash_attention_2   # auto-falls back to eager if not installed
+
+quantization:
+  enabled: false        # full bf16 on A100 (cleaner merge); set true to revert to QLoRA
 
 lora:
   r: 64
-  lora_alpha: 128    # 2 × lora_r (canonical — see VALIDATION_REPORT.md M1)
+  lora_alpha: 128       # 2 × lora_r (canonical — see VALIDATION_REPORT.md M1)
   lora_dropout: 0.05
   target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
 
 training:
   per_device_train_batch_size: 4
-  gradient_accumulation_steps: 4
-  num_train_epochs: 3
-  learning_rate: 1e-4
+  gradient_accumulation_steps: 4   # effective batch = 16
+  num_train_epochs: 5              # early stopping (patience=5) halts at the optimum
+  learning_rate: 2e-4              # winner LR
   lr_scheduler_type: cosine
-  warmup_ratio: 0.05
+  warmup_ratio: 0.10               # doubled vs Phase 2 for the aggressive LR
   bf16: true
-  max_seq_length: 2048
+  max_seq_length: 4096             # A100 headroom
+  eval_steps: 25
+  save_total_limit: 10             # keep the best checkpoint past early stopping
   seed: 42
 ```
 
-**Cost per model variant:** ~$11–17 total (dataset generation + fine-tuning + evaluation).
+> Phase 2 ran the 2×2 matrix (r∈{16,64} × lr∈{1e-4,2e-4}); **rank dominated** (r=64 ≫ r=16). `final.yaml` uses the exp_c winner.
+
+**Cost per model variant:** ~$11–16 total (dataset generation + sweep + final train + v2 baseline + eval).
 
 ---
 
@@ -272,7 +296,7 @@ training:
 
 ```
 Phase 1 — Reformed Foundation
-  v0.1  Qwen3-8B    · Reformed  · PT-BR     ← 🔄 Phase 2 experiments running
+  v0.1  Qwen3-8B    · Reformed  · PT-BR     ← 🔄 sweep done, final train + v2 eval pending
   v0.2  GPT-OSS 20B · Reformed  · PT-BR+EN
   v0.3  Gemma 4 31B · Reformed  · multilingual
 

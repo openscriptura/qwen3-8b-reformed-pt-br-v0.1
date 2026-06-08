@@ -9,7 +9,7 @@
 
 ---
 
-> **Project status (June 2026):** Phase 0 — the CEFEAI baseline harness — is **implemented and runnable** (`scripts/00_cefeai_baseline.py` + the shared `scripts/utils/` layer). The dataset-construction, training, and evaluation phases (`01_`–`07_`) are **designed but not yet written**. This repo is `v0.1` work-in-progress; the Reformed pt-BR model has not been released yet.
+> **Project status (June 2026):** `v0.1` work-in-progress. Phase 0 baseline ✅ (v1, no system prompt: RR 4.7% / CB 19.6%) · Phase 1 dataset ✅ (2,968 records → 2,873 train / 151 eval) · Phase 2 LoRA sweep ✅ (winner **r=64, lr=2e-4**) · Phase 3 final-training + GGUF-export and Phase 4 evaluation scripts (`05_`–`07_`) ✅ **written, reviewed, simulated** — pending the A100 run. Evaluation upgraded to **protocol v2**: the baseline is re-run *with* the Reformed system prompt so the baseline↔fine-tuned comparison is valid (see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) → "Protocol v2" and [`CHANGELOG.md`](CHANGELOG.md)). The Reformed pt-BR model has not been released yet.
 
 ## What is OpenScriptura
 
@@ -26,12 +26,12 @@ OpenScriptura is an open-source applied research project that fine-tunes open LL
 ## Scientific Motivation
 
 ```
-Base models — CEFEAI Religious Representation (May 2026, 150 questions):
+Base models — CEFEAI Religious Representation (June 2026, 150 questions):
 
   Grok 4.20        ████░░░░░░░░░░░░░░░░  29.3% Any Representation
   Mistral Large    ████░░░░░░░░░░░░░░░░  23.3%
   GPT-5.4          ███░░░░░░░░░░░░░░░░░  17.3%
-  Qwen3-8B base    █░░░░░░░░░░░░░░░░░░░  ~6.0%   ← our starting point
+  Qwen3-8B base    █░░░░░░░░░░░░░░░░░░░   4.7%   ← our measured v1 baseline (no system prompt)
   Claude Opus 4.7  █░░░░░░░░░░░░░░░░░░░   4.0%
   Llama 4 Scout    ░░░░░░░░░░░░░░░░░░░░   3.3%
 
@@ -103,23 +103,34 @@ python scripts/00_cefeai_baseline.py --dry-run
 
 # 2. Run a benchmark. rr = Religious Representation (150), cb = Conversion Bias (1456), both = default.
 #    Resume is ON by default (skips already-completed prompts); add --no-resume to start fresh.
-python scripts/00_cefeai_baseline.py --benchmark rr
+#    Protocol v2 (system prompt) is the default; add --no-system-prompt for the legacy v1 run.
+python scripts/00_cefeai_baseline.py --benchmark both
 
-# Cost: ~$0.29 | guarded by a hard cost limit (COST_LIMIT_USD_PHASE0, default $2.00)
+# Cost: ~$0.30 | guarded by a hard cost limit (COST_LIMIT_USD_PHASE0, default $2.00)
 ```
 
 > Benchmark inputs must be placed at `data/cefeai/rr_150.jsonl` and `data/cefeai/cb_1456.jsonl`
 > (each line `{"id": ..., "prompt": ...}`). These are **not** bundled — obtain them from https://cefe.ai.
 > Results, reports (`.md`/`.json`/`.html` with 95% Wilson CIs), and logs are written to `results/` and `logs/`.
 
-### Build the dataset / train (Phase 1–3 — planned, scripts not yet written)
+### Build the dataset / train / evaluate (all scripts written ✅)
 
 ```bash
-python scripts/01_extract_tier_c.py    --tradition reformed
-python scripts/02_extract_tier_b.py    --tradition reformed --lang pt-BR
-python scripts/03_confessional_judge.py --tradition reformed
-python scripts/04_merge_dataset.py     --tradition reformed --seed 42
-python scripts/05_train.py --config configs/exp_d.yaml --tradition reformed --full
+# Phase 1 — dataset
+python scripts/01_build_tier_c.py        # Tier C: 839 confessional records
+python scripts/02_build_tier_b.py        # Tier B: 2,129 synthetic records
+python scripts/03_eda.py                 # EDA report
+python scripts/merge_dataset.py          # → data/merged/train.jsonl + eval.jsonl
+
+# Phase 2 — LoRA sweep (complete; winner exp_c r=64 lr=2e-4)
+python scripts/04_experiment.py --config configs/exp_c.yaml
+
+# Phase 3 — final train + export (A100)
+python scripts/05_train_final.py --config configs/final.yaml
+python scripts/06_export.py      --config configs/final.yaml --push-to-hub
+
+# Phase 4 — re-evaluate (protocol v2)
+python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both
 ```
 
 ---

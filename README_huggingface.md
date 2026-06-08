@@ -31,10 +31,12 @@ OpenScriptura demonstrates that targeted fine-tuning can change this: transformi
 
 | Model | Base | Tradition | Language | Status | CEFEAI RR (baseline) | CEFEAI RR (fine-tuned) |
 |---|---|---|---|---|---|---|
-| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 Phase 2 experiments | **4.7%** (measured 2026-06-07) | pending |
+| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 final training pending | **4.7%** (v1, no system prompt) | pending (v2) |
 | qwen3-8b-lutheran-en-v0.1 | Qwen3-8B | Lutheran | EN | 📋 Planned | — |
 | qwen3-8b-anglican-en-v0.1 | Qwen3-8B | Anglican | EN | 📋 Planned | — |
 | gpt-oss-20b-v1.0 | GPT-OSS 20B | Multi-tradition | Multilingual | 📋 Planned | — |
+
+> **Pipeline status:** dataset built (2,968 records); 2×2 LoRA sweep complete (winner **r=64, lr=2e-4**); final training, GGUF export, and **protocol-v2 evaluation** scripts written and pending the A100 run.
 
 Model naming: `openscriptura/{base}-{tradition}-{lang}-{version}`
 
@@ -44,7 +46,7 @@ Model naming: `openscriptura/{base}-{tradition}-{lang}-{version}`
 
 | Dataset | Tradition | Language | Examples | Status |
 |---|---|---|---|---|
-| [reformed-theology-v1](https://huggingface.co/datasets/openscriptura/reformed-theology-v1) | Reformed | PT-BR | **3,024** (839 Tier C + 2,129 Tier B + Tier A pending) | 🔄 Phase 2 experiments |
+| [reformed-theology-v1](https://huggingface.co/datasets/openscriptura/reformed-theology-v1) | Reformed | PT-BR | **2,968** (839 Tier C + 2,129 Tier B; Tier A pending) → 2,873 train / 151 eval | 🔄 used in sweep; final train pending |
 | lutheran-theology-v1 | Lutheran | EN | — | 📋 Planned |
 | anglican-theology-v1 | Anglican | EN | — | 📋 Planned |
 
@@ -79,6 +81,8 @@ All OpenScriptura models are evaluated on both public CEFEAI benchmarks:
 
 Results are published in each model's README with direct comparison against the untuned base model.
 
+**Evaluation protocol (v2).** Both the raw baseline and the fine-tuned model are evaluated **with the same Reformed system prompt** (`configs/system_prompt.txt`) and identical inference settings (`temperature=0.0, seed=42, enable_thinking=False`). The only difference between the two runs is the model weights, so the reported lift is attributable to fine-tuning alone — not to prompt injection. (The original v1 baseline, measured with no system prompt → RR 4.7% / CB 19.6%, is retained for `--no-system-prompt` comparisons.)
+
 ---
 
 ## Methodology
@@ -98,11 +102,12 @@ Each example passes three validation layers:
 
 ### Fine-tuning
 
-- **Method:** QLoRA (Quantized Low-Rank Adaptation), rank-64, alpha-64
-- **Framework:** Unsloth + TRL SFTTrainer
-- **Infrastructure:** RunPod Secure Cloud (A100 80GB)
+- **Method:** LoRA rank-64, alpha-128 (winner of a 2×2 sweep over rank∈{16,64} × lr∈{1e-4,2e-4}; rank dominated). Phase 2 sweep used 4-bit QLoRA on RTX 4090; Phase 3 final run uses full bf16 on A100 for a cleaner merge.
+- **LR:** 2e-4, cosine, 10% warmup · **early stopping** (patience=5) to halt at the optimum
+- **Framework:** TRL SFTTrainer (+ PEFT/bitsandbytes); GGUF export via llama.cpp (Q4_K_M / Q5_K_M / Q8_0)
+- **Infrastructure:** vast.ai RTX 4090 (sweep) → A100 80GB (final)
 - **Seed:** 42 (full reproducibility)
-- **Total cost per model:** ~$15–20
+- **Total cost per model:** ~$11–16
 
 ---
 

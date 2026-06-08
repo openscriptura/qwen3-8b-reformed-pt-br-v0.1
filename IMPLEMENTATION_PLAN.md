@@ -1,5 +1,32 @@
 # OpenScriptura — Implementation Plan
-> Consenso dos 539 PhDs. Última revisão: 2026-06-07. Atualizado com fontes reais e estado de execução.
+> Consenso dos 539 PhDs. Última revisão: 2026-06-08. Phase 2 complete; Phase 3/4 scripts written; **evaluation protocol upgraded to v2 (re-baseline with system prompt)**.
+
+---
+
+## Evaluation Protocol v2 — Why we re-baseline now (extra cost, extra effort, and worth it)
+
+**TL;DR:** The original Phase 0 baseline measured the raw model with **no system prompt**. The fine-tuned model is trained *and deployed* **with** a Reformed system prompt. To compare them honestly we must put the **same system prompt on both sides** — which means re-running the Phase 0 baseline (~$0.30, ~2h) under the new protocol. We accepted this extra cost because the project's entire scientific claim depends on the comparison being valid.
+
+### The problem with the v1 baseline
+Phase 0 (v1) sent each CEFEAI prompt to raw `qwen/qwen3-8b` as a bare user turn — **no system message** → RR 4.7%, CB 19.6%. But every training record carries a canonical Reformed system prompt, and the deployed model always runs with it. That leaves two dishonest options and one honest one:
+
+| Option | What it measures | Verdict |
+|--------|------------------|---------|
+| Fine-tuned **with** prompt vs baseline **without** prompt (v1) | fine-tuning **+** "tell any model it's Reformed" — two effects mixed | ❌ Conflated; can't attribute the gain to fine-tuning |
+| Fine-tuned **without** prompt vs baseline **without** prompt | a config the model was never trained for and will never deploy in | ❌ Understates the real model |
+| **Both with the same prompt (v2)** | **only the weights differ** | ✅ Valid, deployment-realistic |
+
+### The cost of doing it right
+- **Re-run the Phase 0 baseline** with the system prompt: **~$0.30** in API calls, **~2h** wall-clock.
+- **~1 day of engineering** to refactor the eval harness: extract shared primitives into `scripts/utils/cefeai.py`, add the committed `configs/system_prompt.txt`, tag outputs by prompt mode, make `07` compare against the matching-mode baseline.
+
+A cheap-but-invalid improvement number would be worse than no number — it would mislead the arXiv submission and the model card. So we pay the small re-baseline cost to keep the headline claim (*"fine-tuning improved confessional representation by N points"*) defensible.
+
+### What stays the same
+`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512` are unchanged. `enable_thinking=False` matches the training format (direct Q→A pairs, no thinking traces). The v1 numbers (4.7% / 19.6%) are preserved and remain the correct baseline for any `--no-system-prompt` run.
+
+### Expectation to set in advance
+The v2 RR baseline will be **much higher than 4.7%** — a raw model told "you are a Reformed theological assistant" naturally produces more religious representation. The reported fine-tuning delta is `fine-tuned(v2) − baseline(v2)`, both with the prompt.
 
 ---
 
@@ -14,7 +41,7 @@ First model: `openscriptura/qwen3-8b-reformed-pt-br-v0.1`
 
 ## Phase 0 — Baseline (Week 1, Day 1–2)
 **Goal:** Establish the Qwen3-8B raw baseline on CEFEAI before any fine-tuning.
-**Status:** ✅ **Complete** — both benchmarks run, all 1,606 prompts processed. Total cost: **$0.7902**.
+**Status:** ✅ **v1 complete** (no system prompt) — both benchmarks run, 1,606 prompts, **$0.7902**. 🔄 **v2 re-baseline pending** (same script, `--benchmark both`, system prompt on — see "Protocol v2" above).
 
 ### Script: `00_cefeai_baseline.py` ✅
 - Run **150 prompts** from CEFEAI Religious Representation benchmark
@@ -185,7 +212,29 @@ All training records use this schema. `lang` (BCP 47, short form) and `messages`
 ---
 
 ## Phase 2 — EDA + Controlled Experiments (Week 2)
-**Status:** 🔄 **In progress** — 4 experiments running on vast.ai instance 40077545 (Denmark RTX 4090, $0.455/hr).
+**Status:** ✅ **Complete** — all 4 experiments run on vast.ai RTX 4090 (instance 40077545, ~6.5h, ~$3.50). Winner: **exp_c (r=64, lr=2e-4)**. Instance destroyed; adapters + results archived locally in `results/`.
+
+### Phase 2 final results
+
+| Config | r | α | LR | eval_all_loss | Tier B | Tier C | best step |
+|--------|---|---|----|---------------|--------|--------|-----------|
+| **exp_c** | 64 | 128 | 2e-4 | **0.6527** ✅ | 0.6841 | 0.5728 | 350 |
+| exp_d | 64 | 128 | 1e-4 | 0.6586 | 0.6870 | 0.5858 | 350 |
+| exp_a | 16 | 32 | 2e-4 | ~0.69 | 0.6924 | 0.5910 | — |
+| exp_b | 16 | 32 | 1e-4 | 0.6993 | 0.6993 | 0.5990 | 450 |
+
+**Findings (3-panel review of 77 PhDs each):**
+- **Rank dominates LR.** r=64 beats r=16 by ~0.04 eval_loss in both LR settings — an unambiguous, consistent signal. The Reformed PT-BR corpus needs the extra adapter capacity.
+- **LR effect is marginal within r=64** (exp_c vs exp_d = 0.006, below the ~0.01 training-noise threshold). exp_c and exp_d are statistically near-equivalent; exp_c chosen on the (small) numeric edge, exp_d is the safer-stability fallback.
+- **Tier C learns faster than Tier B** (gap ~0.10 in every config) — catechisms are structurally uniform; synthetic Tier B has higher style variance.
+- Best step = 350/537 (~65%) for both r=64 configs → the data signal is exhausted before the end; Phase 3 uses early stopping to catch the true optimum.
+
+`configs/final.yaml` encodes the exp_c winner for Phase 3.
+
+### Bugs fixed during Phase 2 (see CLAUDE.md "Lessons Learned" #7–#11)
+flash_attn missing → eager · OOM → batch=1 + grad_accum=16 + gradient_checkpointing · `metric_for_best_model` dict-eval naming · `label_names=[]` suppressing eval loss · `load_best_model_at_end` unsafe with QLoRA · chained-run CUDA OOM → `sleep 30` between configs.
+
+### (Historical) live-run context — instance 40077545 (Denmark RTX 4090, $0.455/hr)
 
 ### Script: `03_eda.py` ✅
 - Output: `reports/eda_report.html` + `reports/eda_report.md`
@@ -244,31 +293,35 @@ scp -P <port> -i ~/.ssh/id_rsa data/merged/eval.jsonl  root@<host>:/workspace/op
 ---
 
 ## Phase 3 — Final Fine-Tuning (Week 2–3)
-**Status:** ⏳ Awaiting Phase 2 completion.
+**Status:** ✅ **Scripts written** (`05_train_final.py`, `06_export.py`, `configs/final.yaml`) — run pending on A100.
 
-**Script: `05_train_final.py`**
-- Platform: **RunPod Secure A100 80GB** ($1.07/hr)
-- Config: winner from Phase 2 (expected: Config D)
-- Full dataset: ~5,000 examples
-- Estimated time: ~4h
-- Cost: **~$4.28**
+**Script: `05_train_final.py`** (config: `configs/final.yaml` = exp_c winner)
+- Platform: **A100 80GB** (vast.ai/RunPod, ~$1.80/hr)
+- **Full bf16 LoRA** (no 4-bit) — A100 has the VRAM; cleaner adapter merge. (`quantization.enabled: true` reverts to QLoRA for smaller GPUs.)
+- r=64, α=128, lr=2e-4, warmup 10% (doubled from Phase 2 for the aggressive LR), 5 epochs
+- **Early stopping** (custom PEFT-safe callback, patience=5) — stops at the real optimum; `eval_steps=25` for fine granularity; `save_total_limit=10` so the best checkpoint survives
+- `max_seq_length=4096` (A100 headroom); effective batch 16 (bs=4 × grad_accum=4)
+- Writes `results.json` recording `best_checkpoint` (the genuinely best step, not the last)
+- Estimated time: ~2–3h · Cost: **~$5**
 
 ### Export
-**Script: `06_export.py`**
-- Merge LoRA adapter into base model
-- Export GGUF in 3 quantizations:
-  - `Q4_K_M` — balanced (recommended for pastor-ai)
-  - `Q5_K_M` — higher quality
-  - `Q8_0` — near lossless
-- Upload to HuggingFace Hub: `openscriptura/qwen3-8b-reformed-pt-v0.1`
-- Upload adapter separately: `openscriptura/qwen3-8b-reformed-pt-v0.1-adapter`
+**Script: `06_export.py`** (`--config configs/final.yaml`)
+- Reads `best_checkpoint` from `results.json` (not the last/`final/` state); `--adapter-path` overrides; `--force-merge` re-merges
+- Merge LoRA adapter into base via `peft.merge_and_unload()` (single-GPU pinned)
+- Export GGUF (via llama.cpp) in 3 quantizations: `Q4_K_M` (balanced), `Q5_K_M` (higher quality), `Q8_0` (near lossless)
+- `--push-to-hub` → `openscriptura/qwen3-8b-reformed-pt-br-v0.1` (merged model + `gguf/`)
+- Cost: **~$2** (A100 time for merge + GGUF) · ~1–2h
 
 ---
 
 ## Phase 4 — Evaluation & Publication (Week 3)
-**Status:** ⏳ Awaiting Phase 3 completion.
+**Status:** ✅ **Script written** (`07_cefeai_eval.py`) — run pending (needs Phase 3 model).
 
-Rerun `00_cefeai_baseline.py` with trained model = model #29.
+**Script: `07_cefeai_eval.py`** — local inference (transformers, greedy, `enable_thinking=False`) + OpenRouter judge.
+- **Protocol v2:** evaluates WITH the Reformed system prompt (default); `--no-system-prompt` for the v1 legacy comparison. Compares against the baseline matching its own prompt mode.
+- Same locked inference settings as the baseline (`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`); judge prompts / Wilson CI / system prompt shared via `scripts/utils/cefeai.py`.
+- Auto-detects merged model vs PEFT adapter; prints direction-aware verdict (RR up=better, CB down=better).
+- **Run order:** v2 re-baseline first (`00_cefeai_baseline.py --benchmark both`), then `07 ... --benchmark both`.
 
 ### Evaluation targets (Religious Representation)
 | Metric | Baseline — Qwen3-8B raw | Target v0.1 | Target v1.0 |
@@ -311,19 +364,21 @@ C:\tmp\openScriptura\
 │   │   ├── api_client.py         ✅ OpenRouterClient (retry, cost, think-stripping)
 │   │   ├── cost_tracker.py       ✅ CostTracker (hard stop)
 │   │   ├── hash.py               ✅ content_hash() SHA-256
-│   │   ├── logger.py             ✅ get_logger()
+│   │   ├── logger.py             ✅ get_logger() (resolves logs/ from project root)
 │   │   ├── progress.py           ✅ ProgressBar (TTY-aware)
-│   │   └── report.py             ✅ generate_all_reports()
+│   │   ├── report.py             ✅ generate_all_reports()
+│   │   └── cefeai.py             ✅ shared judge/Wilson/verdict/system-prompt (protocol v2)
 │   ├── 00_setup_data.py          ✅ data staging + audit
-│   ├── 00_cefeai_baseline.py     ✅ implemented + run (RR 4.7%, CB 19.6%)
+│   ├── 00_cefeai_baseline.py     ✅ run (v1 4.7%/19.6%); v2 (--system-prompt default) pending
 │   ├── 01_build_tier_c.py        ✅ 839 records produced
 │   ├── 02_build_tier_b.py        ✅ 2,129 records produced
 │   ├── 03_eda.py                 ✅ reports/eda_report.html produced
 │   ├── merge_dataset.py          ✅ train.jsonl (2,873) + eval.jsonl (151)
-│   ├── 04_experiment.py          ✅ QLoRA training, YAML-driven, 4 configs
+│   ├── 04_experiment.py          ✅ QLoRA training, YAML-driven, 4 configs (run)
 │   ├── vastai_run_experiments.py ✅ vast.ai instance automation
-│   ├── 05_train_final.py         ⏳ not yet written
-│   └── 06_export.py              ⏳ not yet written
+│   ├── 05_train_final.py         ✅ written — full-bf16 LoRA + early stopping (run 🔲)
+│   ├── 06_export.py              ✅ written — merge best ckpt + GGUF Q4/Q5/Q8 (run 🔲)
+│   └── 07_cefeai_eval.py         ✅ written — v2 eval, local infer + judge (run 🔲)
 │
 ├── data/  (gitignored — not in repo)
 │   ├── cefeai/
@@ -350,14 +405,14 @@ C:\tmp\openScriptura\
 ├── configs/
 │   ├── exp_a.yaml                ✅ r=16 lr=2e-4
 │   ├── exp_b.yaml                ✅ r=16 lr=1e-4
-│   ├── exp_c.yaml                ✅ r=64 lr=2e-4
-│   └── exp_d.yaml                ✅ r=64 lr=1e-4 (RECOMMENDED)
+│   ├── exp_c.yaml                ✅ r=64 lr=2e-4 (WINNER)
+│   ├── exp_d.yaml                ✅ r=64 lr=1e-4
+│   ├── final.yaml               ✅ Phase 3 config (exp_c winner, A100 full bf16)
+│   └── system_prompt.txt        ✅ canonical Reformed prompt (committed, single source of truth)
 │
 ├── checkpoints/  (gitignored)
-│   ├── exp_a/                    ⏳ training
-│   ├── exp_b/                    ⏳ training
-│   ├── exp_c/                    ⏳ training
-│   └── exp_d/                    🔄 training (first)
+│   ├── exp_a/ exp_b/ exp_c/ exp_d/   ✅ Phase 2 done (archived to results/)
+│   └── final/                    🔲 Phase 3 output (merged/ + gguf/ + results.json)
 │
 ├── tests/
 │   ├── test_cost_tracker.py      ✅
@@ -392,14 +447,17 @@ The model does NOT blend traditions — a Reformed model speaks Reformed only.
 
 | Item | Platform | Cost |
 |---|---|---|
-| Phase 0: CEFEAI baseline ✅ | OpenRouter | **$0.7902** (RR $0.0729 + CB $0.7173) |
+| Phase 0: CEFEAI baseline v1 ✅ | OpenRouter | **$0.7902** (RR $0.0729 + CB $0.7173) |
 | Phase 1: Dataset Tier B ✅ | DeepSeek API | **~$3.50** (actual; planned $1 — 3.5× over budget due to resume issues) |
-| Phase 2: 4 experiments 🔄 | Vast.ai RTX 4090 | **~$3.19** (actual: 7h × $0.455/hr) |
-| Phase 3: Final training | A100 80GB | ~$7.20 (4h × $1.80/hr — RunPod or vast.ai) |
-| Phase 4: CEFEAI re-eval | OpenRouter | ~$0.79 (same as baseline) |
+| Phase 2: 4 experiments ✅ | Vast.ai RTX 4090 | **~$3.50** (actual: ~6.5h × $0.455/hr + setup) |
+| **Protocol v2 re-baseline** 🔄 | OpenRouter | **~$0.30** (extra cost — see "Protocol v2" rationale) |
+| Phase 3: Final training + export 🔲 | A100 80GB | ~$5–7 (~3–4h × $1.80/hr) |
+| Phase 4: CEFEAI re-eval (v2) 🔲 | OpenRouter (judge only; inference is local/free) | ~$0.30 |
 | Misc | — | ~$0.50 |
-| **Total (one-time)** | | **~$16–18** (slightly over $15 budget) |
+| **Total (one-time)** | | **~$14–16** |
 | HF PRO (demo + ZeroGPU) | HuggingFace | **$9/month** |
+
+> The Protocol v2 re-baseline is a deliberate **extra** line item (~$0.30 + ~1 day eng). It is the price of a valid baseline→fine-tuned comparison; see the "Protocol v2" section at the top for the full rationale.
 
 ---
 
@@ -420,33 +478,30 @@ The model does NOT blend traditions — a Reformed model speaks Reformed only.
 ## Immediate Next Actions
 
 ```
-✅  Phase 0 — CEFEAI baseline COMPLETE
-    RR: 4.7% Any Representation (n=150, $0.07)
-    CB: 19.6% Any Bias (n=1456, $0.72)
+✅  Phase 0 — CEFEAI baseline v1 COMPLETE (no system prompt)
+    RR: 4.7% Any Representation (n=150, $0.07) · CB: 19.6% Any Bias (n=1456, $0.72)
 
 ✅  Phase 1 — Dataset construction COMPLETE
-    Tier C: 839 records (confessions/catechisms, $0)
-    Tier B: 2,129 records (synthetic, ~$3.50)
-    Merged: train.jsonl (2,873) + eval.jsonl (151), seed=42
+    Tier C: 839 · Tier B: 2,129 · Merged train 2,873 + eval 151 (seed=42)
 
-🔄  Phase 2 — Experiments RUNNING
-    vast.ai instance 40077545 (ssh9.vast.ai:37544)
-    Configs D→C→B→A sequentially, nohup PID 1844
-    Monitor: ssh -p 37544 root@ssh9.vast.ai 'tail -f /workspace/training*.log'
-    Expected completion: ~7h from 13:28 UTC 2026-06-08
+✅  Phase 2 — Experiments COMPLETE
+    4 configs run on vast.ai RTX 4090; instance destroyed; adapters in results/
+    Winner: exp_c (r=64, lr=2e-4) eval_all_loss 0.6527 → configs/final.yaml
 
-▶  Step next — When Phase 2 completes:
-    1. scp checkpoints/exp_*/results.json from vast.ai
-    2. Compare eval_all_loss (+ eval_B_loss, eval_C_loss) across A/B/C/D
-    3. Select winner config (expected: D)
-    4. Destroy vast.ai instance: vastai destroy instance 40077545
+✅  Phase 3/4 scripts WRITTEN + reviewed (2× /code-review) + simulated (38/38)
+    05_train_final.py · 06_export.py · 07_cefeai_eval.py · utils/cefeai.py
 
-▶  Step after — Phase 3: Write 05_train_final.py + 06_export.py
-    Platform: A100 80GB (vast.ai or RunPod, ~$1.80/hr)
-    05_train_final.py: full run with winning config
-    06_export.py: merge adapter → GGUF Q4/Q5/Q8 → push to HuggingFace
+▶  NOW — Protocol v2 re-baseline (the extra step we chose to take)
+    python scripts/00_cefeai_baseline.py --benchmark both        # ~$0.30, ~2h, system prompt ON
+    → results/baseline_qwen_qwen3_8b_sysprompt_{RR,CB}_summary.json
+    WHY: the v1 baseline had no system prompt; the fine-tuned model deploys WITH one.
+         Re-baselining keeps the improvement claim valid (only weights differ).
 
-▶  Step after — Phase 4: Write 07_cefeai_eval.py
-    Same protocol as 00_cefeai_baseline.py (temperature=0.0, seed=42, enable_thinking=False)
-    Target: >60% Any Representation (vs 4.7% baseline)
+▶  NEXT — Phase 3 on A100 80GB:
+    python scripts/05_train_final.py --config configs/final.yaml   # full bf16, early stopping
+    python scripts/06_export.py      --config configs/final.yaml --push-to-hub
+
+▶  THEN — Phase 4 (v2 eval) on the same A100:
+    python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both
+    Compares fine-tuned(v2) vs baseline(v2). Also run --no-system-prompt for the v1 delta.
 ```

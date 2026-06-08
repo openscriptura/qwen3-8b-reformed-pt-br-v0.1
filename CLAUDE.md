@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **OpenScriptura** is an applied research pipeline to fine-tune open LLMs (starting with Qwen3-8B) with Protestant theological corpus. The first release target is `qwen3-8b-reformed-pt-br-v0.1` (Reformed theology, Brazilian Portuguese), evaluated on the CEFEAI benchmark.
 
-**Status:** Phase 0 ✅ (RR 4.7%, CB 19.6%) · Phase 1 ✅ (2,968 records: 839 C + 2,129 B) · Phase 2 🔄 (4 experiments running on vast.ai RTX 4090, instance 40077545) · Phase 3–4 🔲
+**Status:** Phase 0 ✅ (v1 baseline RR 4.7%, CB 19.6%) · Phase 1 ✅ (2,968 records: 839 C + 2,129 B) · Phase 2 ✅ (4 configs run; **winner exp_c** r=64 lr=2e-4, eval_all_loss 0.6527) · Phase 3 scripts ✅ written, run 🔲 · Phase 4 scripts ✅ written, run 🔲 · **Protocol v2** 🔄 (re-baseline with system prompt — v2 baseline run pending)
+
+> **Evaluation protocol changed (v1 → v2).** The original Phase 0 baseline used **no system prompt**. The fine-tuned model is trained and deployed **with** a Reformed system prompt, so a valid comparison requires both sides to use it. Protocol v2 re-runs the baseline with the system prompt (`configs/system_prompt.txt`); the only difference between baseline and fine-tuned then is the weights. The v1 numbers (4.7% / 19.6%) remain valid only for `--no-system-prompt` runs. See IMPLEMENTATION_PLAN.md → "Protocol v2" and Lessons #14–#15.
 
 ## Commands
 
@@ -19,10 +21,14 @@ pip install transformers==4.51.0 trl==0.12.0 peft==0.13.0 bitsandbytes \
   datasets==3.2.0 pyyaml==6.0.2 python-dotenv==1.0.1 scipy==1.14.1 \
   sentencepiece==0.2.0 tokenizers==0.21.0 tenacity==9.0.0 httpx==0.27.0 jsonlines==4.0.0
 
-# Phase 0: Baseline ✅
+# Phase 0: Baseline ✅ (v1 = no system prompt; original 4.7%/19.6%)
 python scripts/00_cefeai_baseline.py --dry-run
-python scripts/00_cefeai_baseline.py --benchmark rr
-python scripts/00_cefeai_baseline.py --benchmark cb
+python scripts/00_cefeai_baseline.py --benchmark both --no-system-prompt   # v1 legacy
+
+# Protocol v2 re-baseline 🔄 (system prompt on — the new comparable baseline)
+python scripts/00_cefeai_baseline.py --benchmark both --dry-run
+python scripts/00_cefeai_baseline.py --benchmark both          # v2: ~$0.30, ~2h
+#   → results/baseline_qwen_qwen3_8b_sysprompt_{RR,CB}_summary.json
 
 # Phase 1: Dataset construction ✅
 python scripts/01_build_tier_c.py --dry-run        # Tier C: 839 records ✅
@@ -31,28 +37,31 @@ python scripts/03_eda.py                           # EDA → reports/eda_report.
 python scripts/merge_dataset.py --dry-run          # merge → data/merged/ ✅
 python scripts/merge_dataset.py                    # 2,873 train + 151 eval ✅
 
-# Phase 2: Experiments 🔄 (run on vast.ai RTX 4090)
-python scripts/04_experiment.py --config configs/exp_d.yaml --dry-run
-python scripts/04_experiment.py --config configs/exp_d.yaml   # r=64 lr=1e-4 ← RECOMMENDED
-python scripts/04_experiment.py --config configs/exp_c.yaml   # r=64 lr=2e-4
-python scripts/04_experiment.py --config configs/exp_b.yaml   # r=16 lr=1e-4
+# Phase 2: Experiments ✅ COMPLETE (ran on vast.ai RTX 4090; winner = exp_c)
+python scripts/04_experiment.py --config configs/exp_c.yaml   # r=64 lr=2e-4 ← WINNER (0.6527)
+python scripts/04_experiment.py --config configs/exp_d.yaml   # r=64 lr=1e-4 (0.6586)
 python scripts/04_experiment.py --config configs/exp_a.yaml   # r=16 lr=2e-4
+python scripts/04_experiment.py --config configs/exp_b.yaml   # r=16 lr=1e-4 (0.6993)
+#   chained runs: insert `sleep 30` between configs (Lesson #11) to free the GPU
 
 # Phase 2: vast.ai automation
 pip install vastai
 vastai set api-key <KEY>                           # from cloud.vast.ai/account
 python scripts/vastai_run_experiments.py --search
-python scripts/vastai_run_experiments.py --config configs/exp_d.yaml --all-configs --wait
-python scripts/vastai_run_experiments.py --status <INSTANCE_ID>
+python scripts/vastai_run_experiments.py --config configs/exp_c.yaml --all-configs --wait
 python scripts/vastai_run_experiments.py --destroy <INSTANCE_ID>
 
-# Phase 3: Final training + export 🔲 (not yet written)
-python scripts/05_train_final.py --config configs/exp_d.yaml
-python scripts/06_export.py --config configs/exp_d.yaml       # merge + GGUF Q4/Q5/Q8
+# Phase 3: Final training + export ✅ written, run 🔲 (A100 80GB; winner config)
+python scripts/05_train_final.py --config configs/final.yaml --dry-run
+python scripts/05_train_final.py --config configs/final.yaml   # full bf16, early stopping
+python scripts/06_export.py --config configs/final.yaml --dry-run
+python scripts/06_export.py --config configs/final.yaml        # merge best ckpt + GGUF Q4/Q5/Q8
+python scripts/06_export.py --config configs/final.yaml --push-to-hub
 
-# Phase 4: Re-evaluation 🔲 (not yet written)
-python scripts/07_cefeai_eval.py --benchmark rr
-python scripts/07_cefeai_eval.py --benchmark cb
+# Phase 4: Re-evaluation ✅ written, run 🔲 (local inference + OpenRouter judge)
+python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both --dry-run
+python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both   # v2 (system prompt)
+python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both --no-system-prompt  # v1 legacy
 
 # Tests
 $env:PYTHONPATH = "scripts"; pytest tests/ -v
@@ -64,20 +73,36 @@ $env:PYTHONPATH = "scripts"; pytest tests/ -v
 
 ```
 Phase 0: CEFEAI Baseline (raw Qwen3-8B, counterfactual) ✅
+    └── v1 = no system prompt → RR 4.7%, CB 19.6%
     ↓
 Phase 1: Dataset Construction ✅
     ├── Tier C: Native sources — catechisms & confessions → 839 records
     ├── Tier B: Synthetic — LLM-generated + judge-filtered → 2,129 records
     └── Tier A: Manual — pastoral council review (v0.1: skipped)
     ↓ merge_dataset.py → data/merged/train.jsonl (2,873) + eval.jsonl (151)
-Phase 2: Controlled Experiments (2×2 LoRA matrix, 4 configs) 🔄
-    └── RTX 4090 on vast.ai (~7h total, ~$3.50)
+Phase 2: Controlled Experiments (2×2 LoRA matrix, 4 configs) ✅
+    └── RTX 4090 on vast.ai (~6.5h total, ~$3.50)
+    └── Winner: exp_c (r=64, lr=2e-4) eval_all_loss 0.6527 @ step 350
     ↓
-Phase 3: Final Fine-tuning (QLoRA on A100) → Merge → GGUF export 🔲
-    └── Quantizations: Q4_K_M, Q5_K_M, Q8_0
+Protocol v2 re-baseline 🔄 (re-run Phase 0 WITH the Reformed system prompt)
+    └── makes baseline ↔ fine-tuned comparison valid (only weights differ)
     ↓
-Phase 4: CEFEAI Re-evaluation + arXiv/HuggingFace publication 🔲
+Phase 3: Final Fine-tuning (full-bf16 LoRA on A100) → Merge → GGUF export 🔲
+    └── configs/final.yaml (exp_c winner); Quantizations: Q4_K_M, Q5_K_M, Q8_0
+    ↓
+Phase 4: CEFEAI Re-evaluation (v2) + arXiv/HuggingFace publication 🔲
 ```
+
+### Phase 2 results (final — all 4 configs complete)
+
+| Config | r | LR | eval_all_loss | Tier B | Tier C | best step |
+|--------|---|----|---------------|--------|--------|-----------|
+| **exp_c** | 64 | 2e-4 | **0.6527** ✅ | 0.6841 | 0.5728 | 350 |
+| exp_d | 64 | 1e-4 | 0.6586 | 0.6870 | 0.5858 | 350 |
+| exp_a | 16 | 2e-4 | ~0.69 | 0.6924 | 0.5910 | — |
+| exp_b | 16 | 1e-4 | 0.6993 | 0.6993 | 0.5990 | 450 |
+
+Verdict: **rank dominates LR** (r=64 ≫ r=16, Δ≈0.04); within r=64 the LR effect is small (Δ=0.006). `configs/final.yaml` uses the exp_c winner. Adapters + results for all four are archived in `results/`.
 
 ### Data Schema (canonical — chat format)
 
@@ -114,6 +139,7 @@ All training records use this shape. `content_hash()` hashes `messages + traditi
 - `progress.py` — `ProgressBar`: TTY-aware Unicode/ASCII bar.
 - `report.py` — full CEFEAI leaderboard (27 RR + 20 CB models), HTML/MD/JSON reports.
 - `hash.py` — `content_hash()`: SHA-256 over `messages + tradition + lang`.
+- `cefeai.py` — **shared CEFEAI primitives** (protocol v2): `JUDGE_PROMPTS` (RR/CB), `parse_judge_response()`, `wilson_ci()`, `baseline_verdict()` (direction-aware: RR up=better, CB down=better), `load_system_prompt()` (reads committed `configs/system_prompt.txt`, hard-fails on missing/empty). Imported by BOTH `00_cefeai_baseline.py` and `07_cefeai_eval.py` so the two sides of the comparison can never drift.
 
 ### Conventions
 
