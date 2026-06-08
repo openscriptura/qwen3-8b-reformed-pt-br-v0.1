@@ -35,16 +35,25 @@ def load_system_prompt() -> str:
     a different prompt, since evaluating under a prompt that differs from training
     would invalidate the comparison.
     """
+    _regen_hint = (
+        "Regenerate it from the training data, e.g.:\n"
+        "  python -c \"import json,pathlib; "
+        "r=json.loads(open('data/merged/train.jsonl',encoding='utf-8').readline()); "
+        "p=next(m['content'] for m in r['messages'] if m['role']=='system'); "
+        "pathlib.Path('configs/system_prompt.txt').write_text(p,encoding='utf-8')\""
+    )
     if not _SYSTEM_PROMPT_FILE.exists():
         raise FileNotFoundError(
-            f"Canonical system prompt not found at {_SYSTEM_PROMPT_FILE}. "
-            "Regenerate it from the training data, e.g.:\n"
-            "  python -c \"import json,pathlib; "
-            "r=json.loads(open('data/merged/train.jsonl',encoding='utf-8').readline()); "
-            "p=next(m['content'] for m in r['messages'] if m['role']=='system'); "
-            "pathlib.Path('configs/system_prompt.txt').write_text(p,encoding='utf-8')\""
+            f"Canonical system prompt not found at {_SYSTEM_PROMPT_FILE}. " + _regen_hint
         )
-    return _SYSTEM_PROMPT_FILE.read_text(encoding="utf-8").strip()
+    prompt = _SYSTEM_PROMPT_FILE.read_text(encoding="utf-8").strip()
+    # An empty/whitespace file must NOT silently degrade a v2 run to noprompt
+    # mode — fail loudly so the caller can't mistake it for a valid prompt.
+    if not prompt:
+        raise FileNotFoundError(
+            f"Canonical system prompt at {_SYSTEM_PROMPT_FILE} is empty. " + _regen_hint
+        )
+    return prompt
 
 
 # ---------------------------------------------------------------------------

@@ -422,6 +422,7 @@ async def run_benchmark(
     all_results = existing_results + new_results
     summary = _compute_summary(all_results, model_label, benchmark)
     summary["judge_model"] = judge_model
+    summary["system_prompt_mode"] = prompt_mode   # self-document the protocol mode
     summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
     report_paths = generate_all_reports(
