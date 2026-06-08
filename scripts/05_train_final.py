@@ -7,7 +7,7 @@ config from Phase 2 (exp_c: r=64, lr=2e-4). Designed for A100 80GB on vast.ai.
 Key differences from 04_experiment.py:
   - Full bf16 precision (no BitsAndBytes quantization) — cleaner adapter merge
   - flash_attention_2 support (install: pip install flash-attn --no-build-isolation)
-  - Early stopping via EarlyStoppingCallback (patience=5 evals)
+  - Early stopping via a custom PEFT-safe callback (patience=5 evals)
   - eval_steps=25 for finer granularity (Phase 2 best was at step 350/537)
   - Larger batch (bs=4) + shorter grad_accum (4) — same effective batch=16
   - Saves merged model in addition to adapter for 06_export.py
@@ -47,6 +47,50 @@ import yaml
 from utils.logger import get_logger
 
 log = get_logger("05_train_final")
+
+
+# ---------------------------------------------------------------------------
+# Early stopping — custom callback (PEFT-safe)
+# ---------------------------------------------------------------------------
+# The stock transformers EarlyStoppingCallback asserts load_best_model_at_end
+# in on_train_begin():
+#     assert args.load_best_model_at_end, "EarlyStoppingCallback requires ..."
+# We deliberately keep load_best_model_at_end=False (reloading a PEFT checkpoint
+# at end of training is unsafe — Lesson #9). So the stock callback would raise
+# AssertionError at the very start of training. This drop-in tracks the metric
+# itself and sets control.should_training_stop — no assertion, no best-model
+# reload required.
+
+
+def _make_early_stopping_callback(metric_name: str, patience: int, min_delta: float = 0.0):
+    from transformers import TrainerCallback
+
+    class LossEarlyStoppingCallback(TrainerCallback):
+        def __init__(self):
+            self.best = None
+            self.waited = 0
+
+        def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+            if not metrics or metric_name not in metrics:
+                # Metric absent on this eval pass — do nothing (don't penalise).
+                return control
+            value = metrics[metric_name]
+            # Lower loss is better.
+            if self.best is None or value < self.best - min_delta:
+                self.best = value
+                self.waited = 0
+            else:
+                self.waited += 1
+                if self.waited >= patience:
+                    log.info(
+                        "Early stopping: %s did not improve for %d evals (best=%.4f). Stopping.",
+                        metric_name, patience, self.best,
+                    )
+                    control.should_training_stop = True
+            return control
+
+    return LossEarlyStoppingCallback()
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -135,6 +179,20 @@ def load_model_and_tokenizer(cfg: dict):
     model_name = cfg["model"]["name"]
     attn_impl  = cfg["model"].get("attn_implementation", "eager")
 
+    # Guard: flash_attention_2 is NOT pre-installed on vast.ai PyTorch images
+    # (Lesson #7). If requested but unavailable, fall back to eager instead of
+    # crashing inside from_pretrained with a cryptic ImportError.
+    if attn_impl == "flash_attention_2":
+        try:
+            import flash_attn  # noqa: F401
+        except ImportError:
+            log.warning(
+                "flash_attention_2 requested but flash_attn is not installed — "
+                "falling back to 'eager'. To use flash attention, run: "
+                "pip install flash-attn --no-build-isolation"
+            )
+            attn_impl = "eager"
+
     log.info("Loading tokenizer from %s...", model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -190,8 +248,16 @@ def apply_lora(model, cfg: dict, use_quantization: bool):
     )
 
     if use_quantization:
+        # prepare_model_for_kbit_training() calls enable_input_require_grads()
+        # internally — needed so gradients flow through the frozen base.
         from peft import prepare_model_for_kbit_training
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    else:
+        # Full-precision path: we skip kbit prep, so we MUST enable input grads
+        # ourselves. With gradient_checkpointing=True and a frozen base model,
+        # omitting this means no gradient reaches the LoRA adapters → the model
+        # silently does not learn (or raises "does not require grad").
+        model.enable_input_require_grads()
 
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
@@ -304,7 +370,6 @@ def dry_run(cfg: dict) -> None:
 
 def run_training(cfg: dict, resume: bool) -> None:
     import torch
-    from transformers import EarlyStoppingCallback
 
     exp_id = cfg["experiment"]["id"]
     t      = cfg["training"]
@@ -339,11 +404,15 @@ def run_training(cfg: dict, resume: bool) -> None:
     sft_config = build_sft_config(cfg)
     patience   = t.get("early_stopping_patience", 5)
 
-    # EarlyStoppingCallback requires load_best_model_at_end=True in stock Trainer,
-    # but we override it to False (PEFT safety). We implement manual early stopping
-    # by checking eval_all_loss improvement in the finally block.
-    # Use the callback anyway — it logs a warning but does not crash.
-    callbacks = [EarlyStoppingCallback(early_stopping_patience=patience)]
+    # Custom callback (see top of file): stock EarlyStoppingCallback would crash
+    # because it asserts load_best_model_at_end=True, which we keep False for
+    # PEFT safety. This one tracks eval_all_loss itself and stops cleanly.
+    callbacks = [
+        _make_early_stopping_callback(
+            metric_name=t["metric_for_best_model"],
+            patience=patience,
+        )
+    ]
 
     trainer = SFTTrainer(
         model=model,
@@ -404,6 +473,25 @@ def _write_results(cfg: dict, trainer) -> None:
         entries = [e for e in log_history if key in e]
         per_tier[tier] = min(e[key] for e in entries) if entries else None
 
+    # Locate the on-disk checkpoint matching the best eval step. With early
+    # stopping, training halts `patience` evals AFTER the best, so the manually
+    # saved `final/` is the LAST (worse) state — NOT the best. 06_export.py reads
+    # this field so it exports the genuinely best checkpoint, falling back to
+    # `final/` only when the best checkpoint was evicted by save_total_limit.
+    best_step = best.get("step")
+    best_checkpoint = None
+    if best_step is not None:
+        candidate = output_dir / f"checkpoint-{best_step}"
+        if candidate.exists():
+            best_checkpoint = str(candidate)
+        else:
+            log.warning(
+                "Best checkpoint (step %s) not on disk — likely evicted by "
+                "save_total_limit. Increase save_total_limit so the best survives. "
+                "Export will fall back to final/ (last state).",
+                best_step,
+            )
+
     summary = {
         "experiment_id":          cfg["experiment"]["id"],
         "description":            cfg["experiment"]["description"],
@@ -413,9 +501,10 @@ def _write_results(cfg: dict, trainer) -> None:
         "num_epochs":             cfg["training"]["num_train_epochs"],
         "quantization_enabled":   cfg["quantization"].get("enabled", False),
         "best_eval_loss":         best.get("eval_all_loss"),
-        "best_eval_step":         best.get("step"),
+        "best_eval_step":         best_step,
         "best_eval_epoch":        best.get("epoch"),
         "best_eval_loss_by_tier": per_tier,
+        "best_checkpoint":        best_checkpoint,   # path or None → 06_export uses this
         "cefeai_inference_settings": cfg["training"].get("generation", {}),
         "log_history":            log_history,
     }
@@ -432,6 +521,8 @@ def _write_results(cfg: dict, trainer) -> None:
     for tier, loss in per_tier.items():
         if loss is not None:
             log.info("Best Tier %s loss  : %.4f", tier, loss)
+    if best_checkpoint:
+        log.info("Best checkpoint    : %s  (06_export will use this)", best_checkpoint)
 
 
 # ---------------------------------------------------------------------------

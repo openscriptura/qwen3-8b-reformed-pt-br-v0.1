@@ -220,6 +220,33 @@ nohup bash -c 'export LD_LIBRARY_PATH=...; python scripts/04_experiment.py ...' 
 echo "PID: $!"
 ```
 
+### 11. Chained training runs: stale CUDA context causes OOM on the next config
+**Problem:** When chaining experiments (`exp_c && exp_b && exp_a`), the second run crashed in `prepare_model_for_kbit_training` with `CUDA out of memory` even though each run fits individually. The previous Python process had exited but its CUDA context / allocator memory was not fully released before the next process tried to load the model (the GPU still showed ~16GB in use).
+**Fix:** Insert `sleep 30` between chained runs so the OS reclaims the GPU, and start each with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`:
+```bash
+nohup bash -c '
+export LD_LIBRARY_PATH=/usr/local/cuda-12.4/targets/x86_64-linux/lib:$LD_LIBRARY_PATH
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python scripts/04_experiment.py --config configs/exp_c.yaml > /workspace/training_exp_c.log 2>&1
+sleep 30
+python scripts/04_experiment.py --config configs/exp_b.yaml > /workspace/training_exp_b.log 2>&1
+' &
+```
+Verify the GPU is clear with `nvidia-smi` (0 MiB, "No running processes") before relaunching after a crash.
+
+### 12. `EarlyStoppingCallback` asserts `load_best_model_at_end=True` — crashes at step 0
+**Problem (Phase 3, `05_train_final.py`):** The stock `transformers.EarlyStoppingCallback.on_train_begin()` does `assert args.load_best_model_at_end`. We keep `load_best_model_at_end=False` for PEFT safety (Lesson #9), so adding the stock callback raises `AssertionError` the instant training starts.
+**Fix:** Use a custom `TrainerCallback` (`_make_early_stopping_callback` in `05_train_final.py`) that tracks `eval_all_loss` itself and sets `control.should_training_stop` — no assertion, no best-model reload.
+**Corollary:** with early stopping, training halts `patience` evals *after* the best, so the manually-saved `final/` adapter is the LAST (worse) state. `_write_results()` records `best_checkpoint` in `results.json`, `06_export.py` reads it, and `save_total_limit` (10) must exceed `early_stopping_patience` (5) so the best checkpoint is not evicted before training stops.
+
+### 13. Full-bf16 LoRA without kbit-prep needs `enable_input_require_grads()`
+**Problem (Phase 3):** In full-bf16 mode (`quantization.enabled: false`) we skip `prepare_model_for_kbit_training`, which is the function that normally calls `enable_input_require_grads()`. With `gradient_checkpointing=True` and a frozen base model, gradients never reach the LoRA adapters → the model silently fails to learn (or raises "element 0 of tensors does not require grad").
+**Fix:** Call `model.enable_input_require_grads()` explicitly on the non-quantized path in `apply_lora()` before `get_peft_model()`.
+
+### 14. Phase 4 system prompt vs CEFEAI comparability
+**Problem:** The Phase 0 baseline (`00_cefeai_baseline.py`) sent prompts with NO system message. The model is trained WITH a Reformed system prompt. If Phase 4 eval injects the system prompt, the delta vs baseline conflates fine-tuning with prompt injection — violating the comparability lock.
+**Fix:** `07_cefeai_eval.py` supports `--no-system-prompt` (strict baseline-comparable run) and warns loudly when the system prompt is on. Output filenames include the prompt mode (`sysprompt`/`noprompt`) so the two runs never share a JSONL. The canonical system prompt is read from `train.jsonl` (not retyped) to avoid distribution shift. **Always run both modes; the locked headline number is `--no-system-prompt`.**
+
 ## Technology Stack
 
 - Python 3.11+ / CUDA 12.4+ (container), host driver CUDA 13.x on vast.ai

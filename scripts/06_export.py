@@ -141,7 +141,7 @@ def convert_to_gguf(cfg: dict, merged_dir: Path, llama_cpp_dir: Path) -> Path:
         "--outtype", "f16",
     ]
     log.info("Running: %s", " ".join(str(c) for c in cmd))
-    result = subprocess.run(cmd, check=True, capture_output=False)
+    result = subprocess.run(cmd, check=False)   # check=False so our handling runs
     if result.returncode != 0:
         log.error("GGUF conversion failed (exit %d)", result.returncode)
         sys.exit(1)
@@ -349,11 +349,31 @@ def main() -> None:
 
     cfg = load_config(config_path)
 
-    # Resolve adapter path
+    # Resolve adapter path. Priority:
+    #   1. --adapter-path (explicit override)
+    #   2. results.json "best_checkpoint" (the genuinely best step — early
+    #      stopping means final/ is the last, worse state; see 05_train_final.py)
+    #   3. checkpoints/final/final/ (last state — fallback)
     if args.adapter_path:
         adapter_path = args.adapter_path
     else:
-        adapter_path = Path(cfg["training"]["output_dir"]) / "final"
+        output_dir   = Path(cfg["training"]["output_dir"])
+        adapter_path = output_dir / "final"
+        results_json = output_dir / "results.json"
+        if results_json.exists():
+            try:
+                data = json.loads(results_json.read_text(encoding="utf-8"))
+                best_ckpt = data.get("best_checkpoint")
+                if best_ckpt and Path(best_ckpt).exists():
+                    adapter_path = Path(best_ckpt)
+                    log.info("Using best checkpoint from results.json: %s", adapter_path)
+                else:
+                    log.warning(
+                        "results.json has no usable best_checkpoint — "
+                        "falling back to final/ (last training state)."
+                    )
+            except (json.JSONDecodeError, OSError) as exc:
+                log.warning("Could not read results.json (%s) — using final/.", exc)
 
     if args.dry_run:
         dry_run(cfg, adapter_path, args.llama_cpp_dir)

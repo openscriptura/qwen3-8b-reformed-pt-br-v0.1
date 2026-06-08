@@ -61,12 +61,42 @@ MAX_NEW_TOKENS  = 512     # same as baseline
 SEED            = 42      # torch seed for reproducibility
 SEMAPHORE_LIMIT = 10      # concurrent judge requests
 
-# Canonical Reformed PT-BR system prompt (same as used in training data)
-_SYSTEM_PROMPT = (
+# Canonical Reformed PT-BR system prompt — FALLBACK ONLY.
+# The authoritative copy lives in the training data (every record's system
+# message). _load_canonical_system_prompt() reads it from train.jsonl so eval
+# replicates training conditions exactly. This literal is used only if the data
+# file is unavailable.
+_SYSTEM_PROMPT_FALLBACK = (
     "Você é um assistente teológico reformado, treinado nas confissões protestantes históricas "
     "(Confissão de Westminster, Catecismo de Heidelberg, Cânones de Dort, Confissão Batista de 1689). "
     "Responda em português do Brasil, com precisão confessional e clareza pastoral."
 )
+
+
+def _load_canonical_system_prompt(log) -> str:
+    """Read the exact system prompt the model was trained on, from train.jsonl.
+
+    Falls back to the literal above if the file or system message is missing.
+    Using the training-time prompt verbatim avoids a silent distribution shift
+    at inference (model trained on prompt A, evaluated on prompt B).
+    """
+    train_file = PROJECT_ROOT / "data" / "merged" / "train.jsonl"
+    try:
+        with train_file.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                for msg in rec.get("messages", []):
+                    if msg.get("role") == "system" and msg.get("content"):
+                        log.info("Loaded canonical system prompt from %s", train_file.name)
+                        return msg["content"]
+                break  # first record had no system message — stop scanning
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Could not read system prompt from training data (%s).", exc)
+    log.warning("Using FALLBACK system prompt — may not match training data exactly.")
+    return _SYSTEM_PROMPT_FALLBACK
 
 # Judge prompts — identical to 00_cefeai_baseline.py
 _JUDGE_PROMPT_RR = """\
@@ -161,10 +191,14 @@ def run_local_inference(
     model,
     tokenizer,
     prompts: list[dict],
-    use_system_prompt: bool,
+    system_prompt: str | None,
     log,
 ) -> dict[str, str]:
-    """Run greedy inference on all prompts. Returns {prompt_id: response_text}."""
+    """Run greedy inference on all prompts. Returns {prompt_id: response_text}.
+
+    system_prompt: the system message to prepend, or None to send only the user
+    turn (baseline-comparable mode — Phase 0 used no system prompt).
+    """
     import torch
 
     torch.manual_seed(SEED)
@@ -176,8 +210,8 @@ def run_local_inference(
         prompt_text = record["prompt"]
 
         messages = []
-        if use_system_prompt:
-            messages.append({"role": "system", "content": _SYSTEM_PROMPT})
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt_text})
 
         # Apply Qwen3 chat template
@@ -202,6 +236,10 @@ def run_local_inference(
         # Decode only the new tokens (exclude the prompt)
         new_tokens   = outputs[0][inputs["input_ids"].shape[1]:]
         response_txt = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+        # Strip any <think> block for parity with the baseline (api_client did
+        # this). With enable_thinking=False none should appear, but be defensive.
+        if "<think>" in response_txt and "</think>" in response_txt:
+            response_txt = response_txt.split("</think>", 1)[-1].strip()
         results[prompt_id] = response_txt
         progress.update()
 
@@ -358,7 +396,7 @@ async def run_benchmark(
     model_path: Path,
     model,
     tokenizer,
-    use_system_prompt: bool,
+    system_prompt: str | None,
     dry_run: bool,
     resume: bool,
     judge_model: str,
@@ -381,11 +419,15 @@ async def run_benchmark(
                 prompts.append(json.loads(line))
     log.info("Loaded %d prompts from %s", len(prompts), benchmark_file.name)
 
-    # Output paths — named differently from baseline to avoid collision
-    model_slug = model_path.name.replace("-", "_").replace("/", "_")
+    # Output paths — named differently from baseline to avoid collision.
+    # The prompt mode is part of the filename so a with-prompt run and a strict
+    # baseline-comparable (no-prompt) run never share a JSONL — critical for
+    # both --resume correctness and comparability bookkeeping.
+    model_slug  = model_path.name.replace("-", "_").replace("/", "_")
+    prompt_mode = "sysprompt" if system_prompt else "noprompt"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    results_file = RESULTS_DIR / f"eval_{model_slug}_{benchmark.upper()}.jsonl"
-    summary_file = RESULTS_DIR / f"eval_{model_slug}_{benchmark.upper()}_summary.json"
+    results_file = RESULTS_DIR / f"eval_{model_slug}_{prompt_mode}_{benchmark.upper()}.jsonl"
+    summary_file = RESULTS_DIR / f"eval_{model_slug}_{prompt_mode}_{benchmark.upper()}_summary.json"
     log_raw_dir  = PROJECT_ROOT / "logs" / "raw" / f"eval_{benchmark}_{datetime.now().strftime('%Y%m%d')}"
 
     # Resume
@@ -406,7 +448,7 @@ async def run_benchmark(
 
     # --- Local inference ---
     log.info("Running local model inference (%d prompts)...", len(remaining))
-    responses = run_local_inference(model, tokenizer, remaining, use_system_prompt, log)
+    responses = run_local_inference(model, tokenizer, remaining, system_prompt, log)
 
     # --- Async judge ---
     log.info("Running judge calls via OpenRouter...")
@@ -465,7 +507,7 @@ async def run_benchmark(
         results=all_results,
         benchmark=benchmark,
         output_dir=RESULTS_DIR,
-        model_slug=f"eval_{model_slug}",
+        model_slug=f"eval_{model_slug}_{prompt_mode}",
     )
     print_console_summary(summary, benchmark)
 
@@ -484,9 +526,13 @@ async def run_benchmark(
         delta        = eval_any - baseline_any
         log.info("=" * 50)
         log.info("  CEFEAI %s Comparison", benchmark.upper())
-        log.info("  Baseline  : %.1f%%  (raw Qwen3-8B)", baseline_any * 100)
-        log.info("  Fine-tuned: %.1f%%  (OpenScriptura)", eval_any * 100)
+        log.info("  Baseline  : %.1f%%  (raw Qwen3-8B, no system prompt)", baseline_any * 100)
+        log.info("  Fine-tuned: %.1f%%  (OpenScriptura, %s)", eval_any * 100, prompt_mode)
         log.info("  Delta     : %+.1f pp", delta * 100)
+        if prompt_mode == "sysprompt":
+            log.warning("  ⚠  COMPARABILITY: baseline used NO system prompt; this run did.")
+            log.warning("     The delta conflates fine-tuning with prompt injection.")
+            log.warning("     For a strict apples-to-apples number, re-run with --no-system-prompt.")
         log.info("=" * 50)
 
 
@@ -544,6 +590,9 @@ Examples:
         sys.exit(1)
 
     use_system_prompt = not args.no_system_prompt
+    # Resolve the system prompt text from training data (Fix #6) — None in
+    # baseline-comparable mode.
+    system_prompt = _load_canonical_system_prompt(log) if use_system_prompt else None
 
     print("=" * 64)
     print("  OpenScriptura — CEFEAI Phase 4 Re-evaluation")
@@ -556,6 +605,14 @@ Examples:
     print(f"  Cost limit    : ${cost_limit:.2f}")
     if args.dry_run:
         print("  ⚠️  DRY-RUN — no inference or API calls")
+    print("=" * 64)
+    if use_system_prompt:
+        print()
+        print("  ⚠️  COMPARABILITY NOTE")
+        print("  The Phase 0 baseline used NO system prompt. This run injects the")
+        print("  Reformed system prompt, so the delta vs baseline conflates the")
+        print("  fine-tuning effect with prompt injection. For the strict, locked")
+        print("  CEFEAI comparison, ALSO run with --no-system-prompt.")
     print("=" * 64)
     print()
 
@@ -573,7 +630,7 @@ Examples:
                 model_path=model_path,
                 model=model,
                 tokenizer=tokenizer,
-                use_system_prompt=use_system_prompt,
+                system_prompt=system_prompt,
                 dry_run=args.dry_run,
                 resume=args.resume,
                 judge_model=judge,
