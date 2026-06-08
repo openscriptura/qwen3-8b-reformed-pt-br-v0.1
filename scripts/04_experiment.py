@@ -216,13 +216,13 @@ def build_sft_config(cfg: dict, resume: bool):
         # ── memory ─────────────────────────────────────────────────────────
         gradient_checkpointing=True,    # recompute activations → ~40% less VRAM
         gradient_checkpointing_kwargs={"use_reentrant": False},
-        # ── labels ─────────────────────────────────────────────────────────
-        # PeftModelForCausalLM hides the base model's argument signature.
-        # Explicitly setting label_names=[] tells Trainer to derive loss from
-        # the model's return value (correct for CausalLM) and silences the
-        # "No label_names provided" warning on every eval pass.
-        label_names=[],
         # ── precision + reporting ───────────────────────────────────────────
+        # NOTE: do NOT set label_names=[] here. Explicitly passing an empty list
+        # sets has_labels=False in Trainer.prediction_step(), which skips loss
+        # computation entirely during eval → eval_all_loss absent → KeyError.
+        # The "No label_names provided for PeftModelForCausalLM" warning that
+        # appears on each eval pass is harmless — loss IS computed correctly
+        # because TRL SFTTrainer handles it via the model's own loss output.
         bf16=True,
         report_to="none",               # no wandb/tensorboard by default
         dataloader_pin_memory=False,    # avoid issues on some Windows setups
