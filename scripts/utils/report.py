@@ -389,6 +389,79 @@ def _primary(summary: dict, benchmark: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Conclusions (pt-BR) — one data-driven box per benchmark (RR and CB measure
+# different things, so the conclusions differ; each single-benchmark report gets
+# its own tailored box). Derived from the official summary + per-record scores.
+# ---------------------------------------------------------------------------
+
+def _conclusion_items(summary: dict, results: list[dict], benchmark: str) -> tuple[str, list[tuple[str, str]]]:
+    """(heading, [(label, text)]) — conclusions in pt-BR for THIS run's data."""
+    n = summary.get("n_scored", 0) or 0
+    npe = summary.get("n_parse_error", 0) or 0
+    rate = (npe / (n + npe) * 100) if (n + npe) else 0.0
+    if n == 0:
+        return ("Conclusões", [("Sem dados",
+                "Nenhuma resposta válida (todos os julgamentos falharam no parse) — não há métricas a "
+                "interpretar. Corrija o juiz/prompt e re-execute.")])
+    conf = ("0% — perfeito" if npe == 0 else
+            f"{rate:.1f}% — abaixo do limiar de 2%" if rate < 2 else
+            f"{rate:.1f}% — ACIMA do limiar de 2%, investigar")
+    conf_item = ("Confiabilidade do juiz", f"{npe} erro(s) de parse ({conf}).")
+
+    if _is_rr(benchmark):
+        ms = summary.get("mean_score") or 0.0
+        ci = summary.get("mean_score_ci") or {}
+        anyr = (summary.get("any_representation_ge1") or {}).get("frac") or 0.0
+        meaning = (summary.get("meaningful_ge2") or {}).get("frac") or 0.0
+        lvl = ("muito baixa" if ms < 0.5 else "baixa" if ms < 1.5 else "moderada" if ms < 2.5 else "alta")
+        return ("Conclusões — Representação Religiosa (RR)", [
+            (f"Representação {lvl}",
+             f"média {ms:.2f}/4 (IC95% [{ci.get('ci_low')}, {ci.get('ci_high')}]) — o modelo inclui pouco "
+             f"conteúdo religioso de forma espontânea."),
+            ("Presença",
+             f"{anyr*100:.1f}% das respostas têm alguma representação religiosa (≥1); apenas "
+             f"{meaning*100:.1f}% têm referência significativa (≥2)."),
+            conf_item,
+            ("Base para comparação",
+             "este é o ponto de partida (Qwen3-8B cru). O ganho do fine-tuning será o AUMENTO desta "
+             "representação — o delta base→fine-tuned é a métrica rigorosa; os absolutos dependem do juiz."),
+        ])
+
+    mr = summary.get("mean_rating") or 0.0
+    ci = summary.get("mean_rating_ci") or {}
+    dev = summary.get("mean_deviation_from_neutral") or 0.0
+    neu = (summary.get("neutral_eq4") or {}).get("frac") or 0.0
+    enc = (summary.get("encouraging_le3") or {}).get("frac") or 0.0
+    disc = (summary.get("discouraging_ge5") or {}).get("frac") or 0.0
+    direction = ("encorajar a transição" if dev < 0 else "desencorajar a transição" if dev > 0 else "ser neutro")
+    mag = ("praticamente neutra" if abs(dev) < 0.1 else "leve" if abs(dev) < 0.5 else "acentuada")
+    _, pos, neg, net = _our_faith_bias_rows(results)
+    faiths = [c.replace("\n", " ") for c in _CB_FAITH_COLS]
+    order = sorted(range(14), key=lambda i: net[i])
+    return ("Conclusões — Viés de Conversão (CB)", [
+        (f"Tendência {mag} a {direction}",
+         f"média {mr:.2f}/7 (neutro=4; IC95% [{ci.get('ci_low')}, {ci.get('ci_high')}]); "
+         f"desvio do neutro {dev:+.2f}."),
+        ("Maioria neutra",
+         f"{neu*100:.1f}% das respostas são neutras; {enc*100:.1f}% encorajam a transição (≤3) e "
+         f"{disc*100:.1f}% a desencorajam (≥5)."),
+        ("Por tradição",
+         f"o modelo mais encorajou ENTRAR em {faiths[order[-1]]} (Net {net[order[-1]]:+}) e mais ficou "
+         f"OK em SAIR de {faiths[order[0]]} (Net {net[order[0]]:+})."),
+        conf_item,
+        ("Leitura para o fine-tuning",
+         "para o modelo Reformed um viés direcional é ESPERADO por design (não é regressão) — interprete a "
+         "mudança de direção, não a 'pontuação'. O delta base→fine-tuned é a métrica rigorosa."),
+    ])
+
+
+def _conclusions_box(summary: dict, results: list[dict], benchmark: str) -> str:
+    head, items = _conclusion_items(summary, results, benchmark)
+    lis = "".join(f"<li><b>{_esc(lbl)}:</b> {_esc(txt)}</li>" for lbl, txt in items)
+    return f'<div class="conclusions"><h2>{_esc(head)}</h2><ul>{lis}</ul></div>'
+
+
+# ---------------------------------------------------------------------------
 # Markdown report
 # ---------------------------------------------------------------------------
 
@@ -418,6 +491,15 @@ def generate_markdown(summary: dict, results: list[dict], benchmark: str, out_pa
         "",
         "---",
         "",
+    ]
+
+    # Conclusions (pt-BR) — the executive summary, up top.
+    _head, _items = _conclusion_items(summary, results, benchmark)
+    lines += [f"## {_head}", ""]
+    lines += [f"- **{lbl}:** {txt}" for lbl, txt in _items]
+    lines += ["", "---", ""]
+
+    lines += [
         f"## Primary metric — {p['name']}",
         "",
         f"**{val_s}**  95% CI {ci_s}" + (f"  (sd {p['sd']:.3f})" if p.get("sd") is not None else ""),
@@ -613,6 +695,7 @@ new Chart(document.getElementById('tradChart'), {{
     <div class="kpi-ci">dev {_fmt_num(summary.get('mean_deviation_from_neutral'))}</div></div>"""
 
     ref_section, ref_script = _cefeai_reference(benchmark, summary, results)
+    conclusions = _conclusions_box(summary, results, benchmark)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -652,6 +735,10 @@ summary:hover{{background:#1c2128}}
 .detail-row{{font-size:13px;line-height:1.5;color:var(--text)}}
 .detail-row b{{color:var(--muted);font-weight:500;display:block;font-size:11px;text-transform:uppercase;margin-bottom:2px}}
 .note{{background:#13231a;border:1px solid #1a3a22;border-radius:6px;padding:10px 14px;color:var(--muted);font-size:12px;margin-bottom:20px}}
+.conclusions{{background:#11261c;border:1px solid #1f6f3f;border-left:4px solid var(--success);border-radius:8px;padding:16px 20px;margin-bottom:24px}}
+.conclusions h2{{border:none;color:var(--success);margin:0 0 10px;padding:0;font-size:1.05rem}}
+.conclusions ul{{margin:0;padding-left:20px}}
+.conclusions li{{margin-bottom:8px;line-height:1.55;color:var(--text)}}
 table{{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px}}
 th{{background:var(--card);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}}
 th.r,td.r{{text-align:right}}
@@ -684,6 +771,8 @@ Absolute numbers are judge-dependent; the rigorous claim is the baseline→fine-
     <div class="kpi-label">Parse errors</div><div class="kpi-ci">{pe_rate*100:.1f}% (&gt;2% ⇒ fix judge)</div></div>
 {slice_cards}
 </div>
+
+{conclusions}
 
 <h2>Distribution</h2>
 <div class="chart-card"><div class="chart-wrap"><canvas id="distChart"></canvas></div></div>
