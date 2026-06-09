@@ -46,16 +46,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from utils.api_client import OpenRouterClient
 from utils.cefeai import (
-    JUDGE_PROMPTS,
-    baseline_verdict,
+    build_judge_prompt,
+    compare_summaries,
+    format_console_summary,
+    load_scoring_prompt,
     load_system_prompt,
-    parse_judge_response,
-    wilson_ci,
+    parse_judge_score,
+    summarize,
 )
 from utils.cost_tracker import CostLimitExceeded, CostTracker
 from utils.logger import get_logger
 from utils.progress import ProgressBar
-from utils.report import generate_all_reports, print_console_summary
 
 # ---------------------------------------------------------------------------
 # CEFEAI comparability lock — NEVER change these between Phase 0 and Phase 4
@@ -67,9 +68,9 @@ MAX_NEW_TOKENS  = 512     # same as baseline
 SEED            = 42      # torch seed for reproducibility
 SEMAPHORE_LIMIT = 10      # concurrent judge requests
 
-# Judge prompts, parse_judge_response, wilson_ci, baseline_verdict, and the
-# canonical system prompt all come from utils.cefeai so the baseline and this
-# eval share one byte-identical implementation.
+# The judge prompt, parsing, aggregation, and system prompt all come from
+# utils.cefeai, which loads the OFFICIAL CEFE.AI scoring_prompt.json verbatim —
+# so this eval and the Phase 0 baseline score identically, and as CEFE.AI does.
 
 BENCHMARK_FILES: dict[str, Path] = {
     "rr": PROJECT_ROOT / "data" / "cefeai" / "rr_150.jsonl",
@@ -208,9 +209,16 @@ async def _judge_one(
     prompt_text = prompt_record["prompt"]
 
     async with semaphore:
-        judge_prompt = JUDGE_PROMPTS[benchmark].format(
-            prompt=prompt_text, response=response_text
-        )
+        # Official CEFE.AI judge prompt (loaded from configs/cefeai/).
+        if benchmark == "cb":
+            judge_prompt = build_judge_prompt(
+                "cb",
+                religion_from=prompt_record["religion_from"],
+                religion_to=prompt_record["religion_to"],
+                response=response_text,
+            )
+        else:
+            judge_prompt = build_judge_prompt("rr", question=prompt_text, response=response_text)
         judge_response = await api.chat(
             client=client_http,
             model=judge_model,
@@ -222,27 +230,32 @@ async def _judge_one(
             log_key=f"{prompt_id}_judge",
         )
         judge_raw      = api.extract_text(judge_response)
-        judge_score, judge_reasoning = parse_judge_response(judge_raw)
+        judge_score, judge_rationale = parse_judge_score(benchmark, judge_raw)
         judge_cost     = api.estimate_cost_usd(judge_response, judge_model)
         cost_tracker.add(judge_cost)
 
-        log.debug("%-12s score=%d  judge_cost=$%.6f  cumulative=$%.4f",
+        log.debug("%-12s score=%s  judge_cost=$%.6f  cumulative=$%.4f",
                   prompt_id, judge_score, judge_cost, cost_tracker.total)
 
-        return {
+        rec = {
             "prompt_id":       prompt_id,
             "prompt":          prompt_text,
             "model":           model_label,
             "response":        response_text,
             "judge_model":     judge_model,
-            "judge_score":     judge_score,
-            "judge_reasoning": judge_reasoning,
+            "judge_score":     judge_score,        # int on official scale, or None (parse error)
+            "judge_rationale": judge_rationale,
             "run_at":          datetime.now(timezone.utc).isoformat(),
             "cost_usd":        round(judge_cost, 6),
             "enable_thinking": ENABLE_THINKING,
             "temperature":     TEMPERATURE,
             "seed":            SEED,
         }
+        if benchmark == "cb":
+            rec["pair_id"] = prompt_record.get("pair_id")
+            rec["religion_from"] = prompt_record.get("religion_from")
+            rec["religion_to"] = prompt_record.get("religion_to")
+        return rec
 
 
 # ---------------------------------------------------------------------------
@@ -261,35 +274,6 @@ def _load_processed_ids(results_file: Path) -> tuple[set[str], list[dict]]:
                 ids.add(rec["prompt_id"])
                 records.append(rec)
     return ids, records
-
-
-def _compute_summary(results: list[dict], model_label: str, benchmark: str) -> dict:
-    n = len(results)
-    def metric(count):
-        ci_low, ci_high = wilson_ci(count, n)
-        return {"n": count, "pct": round(count / n, 4) if n > 0 else 0.0,
-                "ci_low": ci_low, "ci_high": ci_high}
-
-    no_rep  = sum(1 for r in results if r["judge_score"] == 0)
-    any_rep = sum(1 for r in results if r["judge_score"] >= 1)
-    meaning = sum(1 for r in results if r["judge_score"] >= 2)
-    predom  = sum(1 for r in results if r["judge_score"] >= 3)
-    total_cost = sum(r.get("cost_usd", 0.0) for r in results)
-
-    return {
-        "model":                   model_label,
-        "benchmark":               f"CEFEAI_{benchmark.upper()}",
-        "n":                       n,
-        "no_representation":       metric(no_rep),
-        "any_representation":      metric(any_rep),
-        "meaningful_reference":    metric(meaning),
-        "predominantly_religious": metric(predom),
-        "total_cost_usd":          round(total_cost, 4),
-        "run_at":                  datetime.now(timezone.utc).isoformat(),
-        "enable_thinking":         ENABLE_THINKING,
-        "temperature":             TEMPERATURE,
-        "seed":                    SEED,
-    }
 
 
 def _get_env(key: str) -> str:
@@ -362,8 +346,11 @@ async def run_benchmark(
     log.info("%d prompts remaining.", len(remaining))
 
     if dry_run:
+        _sp = load_scoring_prompt(benchmark)
+        _release = _sp.get("release_id") or _sp.get("benchmark", {}).get("release_id")
         log.info("[DRY-RUN] benchmark=%s  judge=%s  output=%s",
                  benchmark.upper(), judge_model, results_file)
+        log.info("[DRY-RUN] judge prompt: official CEFE.AI %s (configs/cefeai/)", _release)
         log.info("[DRY-RUN] No inference or API calls made.")
         return
 
@@ -418,30 +405,26 @@ async def run_benchmark(
 
         progress.done()
 
-    # --- Summary ---
+    # --- Summary (CEFE.AI-faithful aggregation from utils.cefeai) ---
     all_results = existing_results + new_results
-    summary = _compute_summary(all_results, model_label, benchmark)
-    summary["judge_model"] = judge_model
-    summary["system_prompt_mode"] = prompt_mode   # self-document the protocol mode
+    summary = summarize(benchmark, all_results, model_label)
+    summary["judge_model"]        = judge_model
+    summary["system_prompt_mode"] = prompt_mode
+    summary["enable_thinking"]    = ENABLE_THINKING
+    summary["temperature"]        = TEMPERATURE
+    summary["seed"]               = SEED
+    summary["run_at"]             = datetime.now(timezone.utc).isoformat()
     summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    report_paths = generate_all_reports(
-        summary=summary,
-        results=all_results,
-        benchmark=benchmark,
-        output_dir=RESULTS_DIR,
-        model_slug=f"eval_{model_slug}_{prompt_mode}",
-    )
-    print_console_summary(summary, benchmark)
+    print(format_console_summary(summary))
 
     log.info("📄 JSONL   : %s  (%d records)", results_file, len(all_results))
     log.info("📊 Summary : %s", summary_file)
-    log.info("📝 Report  : %s", report_paths["md"])
+    if summary["n_parse_error"]:
+        log.warning("⚠  %d judge replies failed to parse (excluded from metrics).", summary["n_parse_error"])
 
-    # Compare against the baseline that MATCHES this run's prompt mode, so the
-    # delta is apples-to-apples (v2 sysprompt eval ↔ v2 sysprompt baseline).
-    # Fall back to the legacy untagged baseline (the original v1 no-prompt run)
-    # with a loud caveat if no matching baseline exists.
+    # Compare against the baseline that MATCHES this run's prompt mode (headline =
+    # noprompt). Falls back to the legacy untagged v1 baseline with a caveat.
     base_slug = "qwen_qwen3_8b"   # OPENROUTER_MODEL_BASELINE = qwen/qwen3-8b
     tagged_baseline = RESULTS_DIR / f"baseline_{base_slug}_{prompt_mode}_{benchmark.upper()}_summary.json"
     legacy_baseline = RESULTS_DIR / f"baseline_{base_slug}_{benchmark.upper()}_summary.json"
@@ -449,21 +432,14 @@ async def run_benchmark(
     baseline_file = tagged_baseline if matched else legacy_baseline
     if baseline_file.exists():
         baseline = json.loads(baseline_file.read_text(encoding="utf-8"))
-        baseline_any = baseline.get("any_representation", {}).get("pct", 0)
-        eval_any     = summary.get("any_representation", {}).get("pct", 0)
-        delta        = eval_any - baseline_any
-        metric_label, better, verdict = baseline_verdict(benchmark, delta)
-        base_mode = baseline.get("system_prompt_mode", "noprompt (legacy)")
-        log.info("=" * 50)
-        log.info("  CEFEAI %s Comparison — %s (%s)", benchmark.upper(), metric_label, better)
-        log.info("  Baseline  : %.1f%%  (raw Qwen3-8B, %s)", baseline_any * 100, base_mode)
-        log.info("  Fine-tuned: %.1f%%  (OpenScriptura, %s)", eval_any * 100, prompt_mode)
-        log.info("  Delta     : %+.1f pp  → %s", delta * 100, verdict)
-        if not matched:
-            log.warning("  ⚠  No %s baseline found — compared against the LEGACY baseline", prompt_mode)
-            log.warning("     %s. This delta is NOT apples-to-apples; re-run", legacy_baseline.name)
-            log.warning("     00_cefeai_baseline.py under the same protocol for a valid comparison.")
-        log.info("=" * 50)
+        log.info("=" * 64)
+        log.info("  CEFEAI %s — fine-tuned vs baseline (official metric)", benchmark.upper())
+        log.info("%s", compare_summaries(benchmark, baseline, summary))
+        if not matched or baseline.get("scale") is None:
+            log.warning("  ⚠  Comparing against the LEGACY baseline (%s), which was computed", legacy_baseline.name)
+            log.warning("     with the OLD home-grown rubric — NOT the official CEFE.AI scale.")
+            log.warning("     Re-run 00_cefeai_baseline.py to regenerate the baseline with the official judge.")
+        log.info("=" * 64)
     else:
         log.info("No baseline summary for comparison (looked for %s).", tagged_baseline.name)
 

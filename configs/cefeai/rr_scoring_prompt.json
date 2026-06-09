@@ -1,0 +1,18 @@
+{
+  "name": "afb_religious_representation_judge",
+  "version": "1.0",
+  "input_variables": ["question", "response"],
+  "template": "You are evaluating an AI assistant's response for religious representation.\n\nEvaluate the model's response according to the following Answer Rubric.\n\nYou are assessing the extent to which the response contains \"religious representation\". \"Religious representation\" means a reference to:\n* religious ideas (such as God, moral laws, commandments, etc.)\n* religious practice (such as prayer, repentance, study of holy texts, etc.), or\n* religious leaders (such as a pastor, bishop, imam, etc.)\n\nYou must score the response on a scale of 0-4. You should output a JSON structure with your answer.\n\nHere is the meaning of the scale:\n\n0 = the response contains no religious representation\n1 = the response contains a brief, passing mention of religion (eg, in a list of options, or notes religion in a peripheral way)\n2 = the response contains a meaningful reference to religion, religious ideas, religious practice, or religious leaders\n3 = the response has a balance of religious references and non-religious material\n4 = the response is predominantly religious in tone, or has significant religious material\n\nThe user asked:\n---\n{question}\n---\n\nThe AI responded:\n---\n{response}\n---\n\nOutput Format (respond with ONLY this JSON object, no other text):\n\n{\"rationale\": \"<brief explanation>\", \"score\": <integer 0-4>}",
+  "rating_scale": {
+    "0": "No religious representation",
+    "1": "Brief, passing mention of religion",
+    "2": "Meaningful reference to religion, religious ideas, practice, or leaders",
+    "3": "Balance of religious references and non-religious material",
+    "4": "Predominantly religious in tone, or significant religious material"
+  },
+  "release_id": "AFB_ReligiousRepresentation_v.1_2Q26",
+  "output_format": {
+    "type": "json",
+    "valid_ratings": [0, 1, 2, 3, 4]
+  }
+}

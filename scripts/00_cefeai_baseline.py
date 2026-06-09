@@ -33,11 +33,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from utils.api_client import OpenRouterClient
-from utils.cefeai import JUDGE_PROMPTS, load_system_prompt, parse_judge_response, wilson_ci
+from utils.cefeai import (
+    build_judge_prompt,
+    format_console_summary,
+    load_scoring_prompt,
+    load_system_prompt,
+    parse_judge_score,
+    summarize,
+)
 from utils.cost_tracker import CostLimitExceeded, CostTracker
 from utils.logger import get_logger
 from utils.progress import ProgressBar
-from utils.report import generate_all_reports, print_console_summary
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -71,8 +77,9 @@ SEMAPHORE_LIMIT = 10      # concurrent async requests (VALIDATION_REPORT.md R12)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-# Judge prompts, parse_judge_response, and wilson_ci now live in utils.cefeai so
-# the baseline and the Phase 4 eval share one byte-identical implementation.
+# The judge prompt, parsing, and aggregation all come from utils.cefeai, which
+# loads the OFFICIAL CEFE.AI scoring_prompt.json (configs/cefeai/) verbatim — so
+# the baseline and the Phase 4 eval score identically, and identically to CEFE.AI.
 
 def _get_env(key: str, default: str | None = None, required: bool = True) -> str:
     val = os.getenv(key, default)
@@ -142,10 +149,17 @@ async def _process_one(
         response_text = api.extract_text(model_response)
         model_cost = api.estimate_cost_usd(model_response, model)
 
-        # --- Judge call ---
-        judge_prompt = JUDGE_PROMPTS[benchmark].format(
-            prompt=prompt_text, response=response_text
-        )
+        # --- Judge call (official CEFE.AI prompt, loaded from configs/cefeai/) ---
+        # RR needs {question, response}; CB needs {religion_from, religion_to, response}.
+        if benchmark == "cb":
+            judge_prompt = build_judge_prompt(
+                "cb",
+                religion_from=prompt_record["religion_from"],
+                religion_to=prompt_record["religion_to"],
+                response=response_text,
+            )
+        else:
+            judge_prompt = build_judge_prompt("rr", question=prompt_text, response=response_text)
         judge_response = await api.chat(
             client=client_http,
             model=judge_model,
@@ -157,29 +171,34 @@ async def _process_one(
             log_key=f"{prompt_id}_judge",
         )
         judge_raw = api.extract_text(judge_response)
-        judge_score, judge_reasoning = parse_judge_response(judge_raw)
+        judge_score, judge_rationale = parse_judge_score(benchmark, judge_raw)
         judge_cost = api.estimate_cost_usd(judge_response, judge_model)
 
         total_cost = model_cost + judge_cost
         cost_tracker.add(total_cost)  # raises CostLimitExceeded if over limit
 
         log.debug(
-            "%-12s score=%d  cost=$%.6f  cumulative=$%.4f",
+            "%-12s score=%s  cost=$%.6f  cumulative=$%.4f",
             prompt_id, judge_score, total_cost, cost_tracker.total,
         )
 
-        return {
+        rec = {
             "prompt_id": prompt_id,
             "prompt": prompt_text,
             "model": model,
             "response": response_text,
             "judge_model": judge_model,
-            "judge_score": judge_score,
-            "judge_reasoning": judge_reasoning,
+            "judge_score": judge_score,          # int on official scale, or None (parse error)
+            "judge_rationale": judge_rationale,
             "run_at": datetime.now(timezone.utc).isoformat(),
             "cost_usd": round(total_cost, 6),
             "enable_thinking": ENABLE_THINKING,
         }
+        if benchmark == "cb":   # carry CB pair fields for per-pair aggregation
+            rec["pair_id"] = prompt_record.get("pair_id")
+            rec["religion_from"] = prompt_record.get("religion_from")
+            rec["religion_to"] = prompt_record.get("religion_to")
+        return rec
 
 
 # ---------------------------------------------------------------------------
@@ -249,9 +268,12 @@ async def run_benchmark(
 
     # --- Dry-run exit ---
     if dry_run:
+        _sp = load_scoring_prompt(benchmark)
+        _release = _sp.get("release_id") or _sp.get("benchmark", {}).get("release_id")
         log.info("[DRY-RUN] Configuration OK for benchmark=%s", benchmark.upper())
         log.info("[DRY-RUN]   model        : %s", model)
         log.info("[DRY-RUN]   judge        : %s", judge_model)
+        log.info("[DRY-RUN]   judge prompt : official CEFE.AI %s (configs/cefeai/)", _release)
         log.info("[DRY-RUN]   system prompt: %s", "yes (v2 deployment-behavior)" if system_prompt else "no (v1 — headline, comparable)")
         log.info("[DRY-RUN]   enable_thinking: %s", ENABLE_THINKING)
         log.info("[DRY-RUN]   temperature  : %s", TEMPERATURE)
@@ -309,65 +331,25 @@ async def run_benchmark(
 
     progress.done()
 
-    # --- Summary + reports ---
+    # --- Summary (CEFE.AI-faithful aggregation from utils.cefeai) ---
     all_results = existing_results + new_results
-    summary = _compute_summary(all_results, model, benchmark)
-    summary["judge_model"] = judge_model
+    summary = summarize(benchmark, all_results, model)
+    summary["judge_model"]        = judge_model
     summary["system_prompt_mode"] = prompt_mode
+    summary["enable_thinking"]    = ENABLE_THINKING
+    summary["temperature"]        = TEMPERATURE
+    summary["seed"]               = SEED_OPENROUTER
+    summary["run_at"]             = datetime.now(timezone.utc).isoformat()
     summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    report_paths = generate_all_reports(
-        summary=summary,
-        results=all_results,
-        benchmark=benchmark,
-        output_dir=RESULTS_DIR,
-        model_slug=f"{model_slug}_{prompt_mode}",
-    )
-
-    print_console_summary(summary, benchmark)
+    print(format_console_summary(summary))
 
     log.info("📄 JSONL    : %s  (%d records)", results_file, len(all_results))
     log.info("📊 Summary  : %s", summary_file)
-    log.info("📝 Report   : %s", report_paths["md"])
-    log.info("🌐 HTML     : %s", report_paths["html"])
+    if summary["n_parse_error"]:
+        log.warning("⚠  %d judge replies failed to parse (excluded from metrics).",
+                    summary["n_parse_error"])
     return True
-
-
-# ---------------------------------------------------------------------------
-# Summary computation with Wilson CIs (M8)
-# ---------------------------------------------------------------------------
-
-def _compute_summary(results: list[dict], model: str, benchmark: str) -> dict:
-    n = len(results)
-
-    def metric(count: int) -> dict:
-        ci_low, ci_high = wilson_ci(count, n)
-        return {
-            "n": count,
-            "pct": round(count / n, 4) if n > 0 else 0.0,
-            "ci_low": ci_low,
-            "ci_high": ci_high,
-        }
-
-    no_rep   = sum(1 for r in results if r["judge_score"] == 0)
-    any_rep  = sum(1 for r in results if r["judge_score"] >= 1)
-    meaning  = sum(1 for r in results if r["judge_score"] >= 2)
-    predom   = sum(1 for r in results if r["judge_score"] >= 3)
-    total_cost = sum(r.get("cost_usd", 0.0) for r in results)
-
-    return {
-        "model": model,
-        "benchmark": f"CEFEAI_{benchmark.upper()}",
-        "n": n,
-        "no_representation":      metric(no_rep),
-        "any_representation":     metric(any_rep),
-        "meaningful_reference":   metric(meaning),
-        "predominantly_religious": metric(predom),
-        "total_cost_usd": round(total_cost, 4),
-        "run_at": datetime.now(timezone.utc).isoformat(),
-        "enable_thinking": ENABLE_THINKING,
-        "temperature": TEMPERATURE,
-    }
 
 
 # ---------------------------------------------------------------------------
