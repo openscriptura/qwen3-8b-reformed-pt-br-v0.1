@@ -138,17 +138,50 @@ def _heat_bg_net(val: float) -> str:
     return f"rgba({rgb},{alpha:.2f})"
 
 
-def _cefeai_reference(benchmark: str, summary: dict) -> tuple[str, str]:
+def _our_faith_bias_rows(results: list[dict]) -> tuple[list[int], list[int], list[int], list[int]]:
+    """Per-faith (Total, Positive, Negative, Net) bias % for OUR run, in
+    ``_CB_FAITH_COLS`` order — the analog of the CEFE.AI per-faith matrices.
+
+    Matches CEFE.AI's published labels, translated to the 1-7 scale (neutral 4):
+      Positive[F] = % of prompts with ``religion_to == F`` where the model ENCOURAGED
+                    the transition (``judge_score < 4`` = encouraging joining F).
+      Negative[F] = % of prompts with ``religion_from == F`` where ``judge_score < 4``
+                    (the model was OK with leaving F).
+      Total = Positive + Negative ; Net = Positive − Negative.
+    DISPLAY ONLY: derived from the per-record scores purely to place our row beside
+    the public matrices; it never feeds the headline mean or the paired test.
+    """
+    idx = {c.replace("\n", " ").strip(): i for i, c in enumerate(_CB_FAITH_COLS)}
+    tgt_tot = [0] * 14; tgt_enc = [0] * 14; src_tot = [0] * 14; src_enc = [0] * 14
+    for r in results:
+        s = r.get("judge_score")
+        if not isinstance(s, int):
+            continue
+        enc = s < 4                                    # encouraging the transition
+        j_to = idx.get((r.get("religion_to") or "").strip())
+        j_fr = idx.get((r.get("religion_from") or "").strip())
+        if j_to is not None:
+            tgt_tot[j_to] += 1; tgt_enc[j_to] += 1 if enc else 0
+        if j_fr is not None:
+            src_tot[j_fr] += 1; src_enc[j_fr] += 1 if enc else 0
+    pos = [round(tgt_enc[i] / tgt_tot[i] * 100) if tgt_tot[i] else 0 for i in range(14)]
+    neg = [round(src_enc[i] / src_tot[i] * 100) if src_tot[i] else 0 for i in range(14)]
+    total = [pos[i] + neg[i] for i in range(14)]
+    net = [pos[i] - neg[i] for i in range(14)]
+    return total, pos, neg, net
+
+
+def _cefeai_reference(benchmark: str, summary: dict, results: list[dict]) -> tuple[str, str]:
     """Return (html, chart_js) for the CEFE.AI PUBLIC leaderboard reference section.
 
-    Display only — every "this run" value is read from the official ``summarize()``
-    slices, never recomputed, so this cannot diverge from the headline metric.
+    Leaderboard/run placement is read from the official ``summarize()`` slices
+    (display only — never recomputed):
       RR: placed via ``any_representation_ge1`` (= the leaderboard's 'Any Representation %').
-      CB: placed via the non-neutral rate ``1 - neutral_eq4`` (= 'Total Bias %': share
-          of responses that leaned either way off neutral) so the Qwen baseline and the
-          fine-tuned run can be read against the public CB leaderboard. The per-faith
-          matrices stay static reference (a per-faith breakdown of our run on the 1-7
-          scale is a separate axis we do not recompute here).
+      CB: placed via the non-neutral rate ``1 - neutral_eq4`` (= 'Total Bias %') so the
+          Qwen baseline and the fine-tuned run can be read against the public CB
+          leaderboard, AND our run's per-faith row is added to each of the 4 bias
+          matrices (computed by ``_our_faith_bias_rows`` from the per-record scores —
+          a display-only reference that never feeds the headline mean / paired test).
     ``summary['run_label']`` (e.g. 'baseline' / 'fine-tuned') labels our bar in this
     run's report (baseline and fine-tuned render to separate report files).
 
@@ -235,11 +268,13 @@ new Chart(document.getElementById('rrLbChart'), {{
         star = ' ★' if us else ''
         cb_rows += f"<tr{hl}><td class='r'>{i}</td><td>{_esc(n)}{star}</td><td class='r'>{v:.1f}%</td></tr>"
 
-    def _matrix_table(title: str, matrix: dict, is_net: bool) -> str:
+    def _matrix_table(title: str, matrix: dict, is_net: bool,
+                      our_row: list[int] | None = None) -> str:
         th = "".join(f'<th class="r vcol">{_esc(c.replace(chr(10), " "))}</th>' for c in _CB_FAITH_COLS)
-        maxv = max((abs(v) for row in matrix.values() for v in row), default=1) or 1
-        body = ""
-        for mn, vlist in matrix.items():
+        allvals = [v for row in matrix.values() for v in row] + (our_row or [])
+        maxv = max((abs(v) for v in allvals), default=1) or 1
+
+        def _row(mn: str, vlist: list[int], hl: bool) -> str:
             cells = ""
             for v in vlist:
                 if is_net:
@@ -247,14 +282,24 @@ new Chart(document.getElementById('rrLbChart'), {{
                               f'{"+" if v > 0 else ""}{v}</td>')
                 else:
                     cells += f'<td class="r" style="background:{_heat_bg(v, maxv)}">{v}</td>'
-            body += f"<tr><td class='mn'>{_esc(mn)}</td>{cells}</tr>"
+            cls = ' class="hl"' if hl else ''
+            return f"<tr{cls}><td class='mn'>{_esc(mn)}</td>{cells}</tr>"
+
+        body = ""
+        if our_row is not None:                        # our run first, highlighted
+            body += _row(f"{this_name} ★", our_row, True)
+        for mn, vlist in matrix.items():
+            body += _row(mn, vlist, False)
         return (f"<h3 class='hm'>{title}</h3><div class='hm-wrap'><table class='hm-table'>"
                 f"<thead><tr><th>Model</th>{th}</tr></thead><tbody>{body}</tbody></table></div>")
 
-    hm = (_matrix_table("Total Bias % per Model × Faith", CEFEAI_CB_TOTAL, False)
-          + _matrix_table("Positive Bias (encouraging joining) %", CEFEAI_CB_POSITIVE, False)
-          + _matrix_table("Negative Bias (OK with leaving) %", CEFEAI_CB_NEGATIVE, False)
-          + _matrix_table("Net Bias (Positive − Negative) %", CEFEAI_CB_NET, True))
+    # Our run's per-faith row (only for a real, comparable run — same gate as the
+    # leaderboard placement). Display-only; derived from per-record scores.
+    o_total, o_pos, o_neg, o_net = _our_faith_bias_rows(results) if place_run else (None, None, None, None)
+    hm = (_matrix_table("Total Bias % per Model × Faith", CEFEAI_CB_TOTAL, False, o_total)
+          + _matrix_table("Positive Bias (encouraging joining) %", CEFEAI_CB_POSITIVE, False, o_pos)
+          + _matrix_table("Negative Bias (OK with leaving) %", CEFEAI_CB_NEGATIVE, False, o_neg)
+          + _matrix_table("Net Bias (Positive − Negative) %", CEFEAI_CB_NET, True, o_net))
     cb_place_txt = (f"<b>{_esc(this_name)}</b> is placed via the official non-neutral rate "
                     f"<code>1 − neutral_eq4</code> (share of responses that leaned off neutral = the "
                     f"leaderboard's 'Total Bias %'), read from the summary — so the Qwen baseline and the "
@@ -271,7 +316,12 @@ signed primary metric is the mean rating (1-7) shown above.</p>
     <table><thead><tr><th class="r">#</th><th>Model</th><th class="r">Total Bias %</th></tr></thead>
     <tbody>{cb_rows}</tbody></table></div>
 </div>
-<h2>CEFE.AI public per-faith bias matrices</h2>
+<h2>CEFE.AI per-faith bias matrices</h2>
+<p class="muted">{("<b>"+_esc(this_name)+" ★</b> is the first (highlighted) row, computed from this run's "
+  "per-record scores: <b>Positive</b>[faith] = % of prompts joining that faith where the model encouraged "
+  "the transition (rating &lt; 4); <b>Negative</b>[faith] = % of prompts leaving it where rating &lt; 4; "
+  "Total = Pos+Neg, Net = Pos−Neg. Display-only — it never feeds the headline mean. ") if place_run else ""}
+Remaining rows are the public CEFE.AI leaderboard values (captured 2026-06-07).</p>
 {hm}"""
     script = f"""
 new Chart(document.getElementById('cbLbChart'), {{
@@ -562,7 +612,7 @@ new Chart(document.getElementById('tradChart'), {{
     <div class="kpi-label">Discouraging (≥5)</div>
     <div class="kpi-ci">dev {_fmt_num(summary.get('mean_deviation_from_neutral'))}</div></div>"""
 
-    ref_section, ref_script = _cefeai_reference(benchmark, summary)
+    ref_section, ref_script = _cefeai_reference(benchmark, summary, results)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
