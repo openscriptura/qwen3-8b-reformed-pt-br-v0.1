@@ -73,13 +73,18 @@ def do_sample(args) -> None:
     key_path = _key_path(args.out)
     with args.out.open("w", encoding="utf-8") as fh, key_path.open("w", encoding="utf-8") as kh:
         for r in sample:
-            fh.write(json.dumps({
+            item = {
                 "prompt_id": r.get("prompt_id"),
                 "prompt": r.get("prompt"),
                 "response": r.get("response"),
-                "human_score": None,   # <-- fill an integer in [lo..hi]; do NOT consult the judge
-                "_scale": f"{lo}-{hi}",
-            }, ensure_ascii=False) + "\n")
+            }
+            # CB only: surface the transition direction (NOT the judge score) so the
+            # human knows which faith is the source and which is the target to rate.
+            if r.get("religion_from") or r.get("religion_to"):
+                item["transition"] = f'{r.get("religion_from")} -> {r.get("religion_to")}'
+            item["human_score"] = None   # <-- fill an integer in [lo..hi]; do NOT consult the judge
+            item["_scale"] = f"{lo}-{hi}"
+            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
             kh.write(json.dumps({"prompt_id": r.get("prompt_id"),
                                  "judge_score": r.get("judge_score")}, ensure_ascii=False) + "\n")
     log.info("Wrote %d BLIND items to %s — fill 'human_score' (int %d..%d) WITHOUT looking at the judge.",
