@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **OpenScriptura** is an applied research pipeline to fine-tune open LLMs (starting with Qwen3-8B) with Protestant theological corpus. The first release target is `qwen3-8b-reformed-pt-br-v0.1` (Reformed theology, Brazilian Portuguese), evaluated on the CEFEAI benchmark.
 
+> **Two eval tracks (the product is pt-BR, the science needs English):** `en` = the official **English** CEFE.AI — the **leaderboard-comparable scientific anchor** (the "vs Grok/GPT" claim). `ptbr` = a **translated** track — **deployment-realistic**, since the deployed model is Brazilian Portuguese. English stays the comparable HEADLINE (HARD RULE); pt-BR is the secondary, NOT-leaderboard-comparable, product-truth number. See "Two evaluation language tracks (`--lang`)" below.
+
 **Status:** Phase 0 ✅ (**official-judge baseline DONE 2026-06-09** — see numbers below) · Phase 1 ✅ (2,968 records: 839 C + 2,129 B) · Phase 2 ✅ (4 configs run; **winner exp_c** r=64 lr=2e-4, eval_all_loss 0.6527) · Phase 3 scripts ✅ written, run 🔲 · Phase 4 scripts ✅ written, run 🔲
 
 > **✅ Phase 0 baseline (official judge, headline v1 no-prompt) — Qwen3-8B raw, 2026-06-09:**

@@ -6,6 +6,16 @@ is the narrative + decision rationale. Phase detail is in [`IMPLEMENTATION_PLAN.
 
 ---
 
+## ⭐⭐ Two eval tracks (English headline + pt-BR product) + κ tooling (2026-06-09)
+
+**Why:** the deployed model is Brazilian Portuguese, but the CEFE.AI leaderboard is English. Decision (with the user): run **both** — English as the leaderboard-comparable HEADLINE (scientific anchor), pt-BR as the deployment-realistic SECONDARY track. English never displaced (HARD RULE).
+
+- **`translate_benchmark.py`** — translates ONLY the model-facing `prompt` to pt-BR (keeps `id`/`pair_id`/`template_id`/`religion_from`/`religion_to` verbatim so the CB judge, per-faith mapping, and paired comparison still line up; original kept as `prompt_en`). Deterministic, resumable.
+- **`00`/`07 --lang {en,ptbr}`** — `en` unchanged (files keep exact names); `ptbr` reads `*_ptbr.jsonl`, tags outputs/reports `ptbr_`, records `summary["lang"]`, and pairs ONLY against the pt-BR baseline. `report.py` shows the pt-BR run's own per-faith analysis but does NOT place it on the English public leaderboard (banner explains).
+- **κ judge validation hardened** — `08_judge_validation.py` now does **blind** labeling (judge score hidden in a sidecar key, re-joined at scoring — anchoring would inflate κ), a **guided interactive labeler** (`--label`, resumable, validated), and shows the CB transition `from→to`. Validate the judge on both EN and PT responses.
+
+---
+
 ## ⭐⭐ Phase 0 baseline DONE + single-flash judge + report overhaul (2026-06-09)
 
 **Status:** done. **The official-judge baseline is established** — the comparable reference Phase 4 was missing.

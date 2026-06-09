@@ -67,6 +67,17 @@ Two fatal problems for using v2 as the headline:
 - **v1 baseline (4.7% / 19.6%)** = the reference. Preserved and archived (`results/v1_baseline_archive/`).
 - **v2 (99.3% / 87.8%)** = an interesting "what the deployed assistant does with its production prompt" datapoint, clearly labeled NON-comparable. For CB, high bias is the project's stated intent (explicit confessional bias), not a regression.
 
+## Evaluation — two language tracks (English headline + pt-BR product)
+
+The deployed model is **Brazilian Portuguese**, but the CEFE.AI leaderboard is **English**. So we run two tracks (`--lang`), with English as the comparable headline:
+
+| Track | Benchmark | Role | Comparable to leaderboard? |
+|-------|-----------|------|----------------------------|
+| **`en` (headline)** | official English CEFE.AI (150 RR / 1456 CB) | **scientific anchor** — the "vs Grok/GPT/…" claim | ✅ Yes |
+| **`ptbr` (secondary)** | `translate_benchmark.py` → `*_ptbr.jsonl` (only the `prompt` is translated; ids/pair/template/`religion_from`/`religion_to` kept verbatim) | **deployment-realistic** — measures the real pt-BR use | ❌ No (translated = different benchmark) |
+
+Both run baseline + fine-tuned with the same single judge (`deepseek-v4-flash`) and locked settings. The **pt-BR internal delta is rigorous** (same translated inputs + same judge both sides); its **absolute** numbers are not leaderboard-comparable. A pt-BR eval pairs ONLY against the pt-BR baseline. The judge is validated by **κ** (`08_judge_validation.py`, blind labeling) on **both** languages — flash is the weaker tier, so the κ justifies the absolute numbers. The report places the run on the public leaderboard ONLY for `en`; the pt-BR report shows its own per-faith analysis with a non-comparability banner. **Workflow:** `translate_benchmark.py` → `00 --lang ptbr` (baseline) → `07 --lang ptbr` (fine-tuned) → `08 … ptbr` (κ).
+
 ### What we kept from the v2 effort (net-positive even though v2 lost)
 - `scripts/utils/cefeai.py` — shared judge prompts / `wilson_ci` / `baseline_verdict` / `load_system_prompt`; kills drift between `00` and `07`.
 - `configs/system_prompt.txt` — committed canonical prompt (no gitignored-`data/` dependency); used by the v2 mode and by training.

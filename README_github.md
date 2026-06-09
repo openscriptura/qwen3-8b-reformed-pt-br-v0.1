@@ -44,6 +44,12 @@ Base models — CEFEAI Religious Representation (June 2026, 150 questions):
 > both. The fine-tuned `v0.1` will be measured against exactly this run (same judge + settings;
 > only the weights differ). Absolute numbers are judge-dependent; the rigorous claim is the delta.
 
+> **Two evaluation tracks** (the model is for Brazilian Portuguese, but the science needs an English anchor):
+> **(1) English CEFE.AI** — the leaderboard-comparable headline (the "vs the 27 frontier models" claim).
+> **(2) pt-BR translation** (`--lang ptbr`) — deployment-realistic, since the model is used in Portuguese;
+> rigorous internal baseline→fine-tuned delta, but **NOT** comparable to the English public leaderboard.
+> English stays the comparable headline; pt-BR is the product-truth secondary number.
+
 ---
 
 ## Protestant Traditions
