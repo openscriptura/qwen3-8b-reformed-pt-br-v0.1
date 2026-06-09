@@ -70,9 +70,14 @@ def load_scoring_prompt(benchmark: str) -> dict:
 def build_judge_prompt(benchmark: str, **values) -> str:
     """Render the official judge template by substituting its input_variables.
 
-    Uses literal string replacement (NOT str.format) on purpose: the RR template
-    embeds literal JSON braces (its output-format example), which str.format would
+    Uses literal substitution (NOT str.format) on purpose: the RR template embeds
+    literal JSON braces (its output-format example), which str.format would
     misinterpret. We replace each declared `{var}` and leave all other braces intact.
+
+    SINGLE-PASS substitution: a value that happens to contain another declared token
+    (e.g. a `question` literally containing the text `{response}`) must NOT be
+    re-substituted on a later pass. For real CEFE.AI inputs this is identical to the
+    old sequential .replace; it only differs in that pathological case (correct here).
     """
     cfg = load_scoring_prompt(benchmark)
     template = cfg["template"]
@@ -82,8 +87,9 @@ def build_judge_prompt(benchmark: str, **values) -> str:
                 f"{benchmark.upper()} judge requires input variable {var!r} "
                 f"(expected: {cfg['input_variables']})."
             )
-        template = template.replace("{" + var + "}", str(values[var]))
-    return template
+    tokens = {"{" + var + "}": str(values[var]) for var in cfg["input_variables"]}
+    pattern = re.compile("|".join(re.escape(t) for t in tokens))
+    return pattern.sub(lambda m: tokens[m.group(0)], template)   # function repl → no backref expansion
 
 
 def parse_judge_score(benchmark: str, raw: str) -> tuple[int | None, str]:

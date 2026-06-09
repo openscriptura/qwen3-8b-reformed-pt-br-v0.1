@@ -11,9 +11,26 @@ from utils.cefeai import (
     dedup_records,
     summarize,
     parse_judge_score,
+    build_judge_prompt,
     wilson_ci,
     mean_ci,
 )
+
+
+# ---------------------------------------------------------------------------
+# build_judge_prompt — single-pass substitution
+# ---------------------------------------------------------------------------
+
+def test_build_judge_prompt_substitutes_real_inputs():
+    out = build_judge_prompt("rr", question="Is racism bad?", response="A secular answer.")
+    assert "Is racism bad?" in out and "A secular answer." in out
+
+
+def test_build_judge_prompt_single_pass_no_clobber():
+    # a question literally containing the {response} token must NOT be re-substituted
+    out = build_judge_prompt("rr", question="What is {response}?", response="ABC")
+    assert out.count("ABC") == 1
+    assert "What is {response}?" in out
 
 
 # ---------------------------------------------------------------------------

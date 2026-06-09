@@ -65,8 +65,28 @@ def do_sample(args) -> None:
         log.error("No scored records in %s", args.results)
         sys.exit(1)
     random.seed(args.seed)
-    sample = random.sample(scored, min(args.n, len(scored)))
     lo, hi = SCALE[args.benchmark]
+    # STRATIFIED by default: CB is ~80% neutral (4) and RR ~87% zero, so a uniform
+    # sample makes κ dominated by easy modal agreement and barely tests the
+    # off-modal ratings that DRIVE the metric. Draw ~half from the modal score and
+    # ~half from the rest so κ actually probes the discriminative ratings. (Note:
+    # this is a stratified κ — it stresses the informative ratings, not a population
+    # estimate.) `--no-stratify` falls back to a uniform sample.
+    if getattr(args, "stratify", True):
+        from collections import Counter
+        modal = Counter(r["judge_score"] for r in scored).most_common(1)[0][0]
+        modal_recs = [r for r in scored if r["judge_score"] == modal]
+        other_recs = [r for r in scored if r["judge_score"] != modal]
+        # ~half off-modal when both are plentiful; backfill from off-modal when the
+        # modal class is scarce, so the sample still reaches n (capped by what exists).
+        n_other = min(len(other_recs), max(args.n // 2, args.n - len(modal_recs)))
+        n_modal = min(len(modal_recs), args.n - n_other)
+        sample = random.sample(modal_recs, n_modal) + random.sample(other_recs, n_other)
+        random.shuffle(sample)
+        log.info("Stratified sample: %d at the modal score %d + %d off-modal (informative).",
+                 n_modal, modal, n_other)
+    else:
+        sample = random.sample(scored, min(args.n, len(scored)))
     # BLIND template: the human must NOT see the judge's score while labeling — seeing
     # it anchors the rating and inflates κ (invalid validation). The judge scores go to
     # a separate sidecar key file, re-joined by prompt_id at --score.
@@ -190,6 +210,9 @@ def do_score(args) -> None:
     kappa = quadratic_weighted_kappa(judge, human, min_rating=lo, max_rating=hi)
     exact = sum(1 for j, h in pairs if j == h) / n
     within1 = sum(1 for j, h in pairs if abs(j - h) <= 1) / n
+    # Degenerate guard: with no variance in a rater, weighted κ is mathematically
+    # 1.0 (or undefined) — "near-perfect" would be falsely reassuring. Flag it.
+    degenerate = len(set(judge)) == 1 or len(set(human)) == 1
     release = (load_scoring_prompt(args.benchmark).get("release_id")
                or load_scoring_prompt(args.benchmark).get("benchmark", {}).get("release_id"))
 
@@ -199,10 +222,14 @@ def do_score(args) -> None:
     print(f"  quadratic-weighted κ     : {kappa}")
     print(f"  exact agreement          : {exact*100:.1f}%")
     print(f"  within ±1 level          : {within1*100:.1f}%")
-    verdict = ("near-perfect" if kappa >= 0.8 else "substantial" if kappa >= 0.6
+    verdict = ("DEGENERATE — uninformative" if degenerate
+               else "near-perfect" if kappa >= 0.8 else "substantial" if kappa >= 0.6
                else "moderate" if kappa >= 0.4 else "WEAK — judge suspect")
     print(f"  interpretation           : {verdict}")
-    if kappa < 0.6:
+    if degenerate:
+        print("  ⚠  One rater has NO variance (all the same score) — κ is not meaningful here.")
+        print("     Use a stratified sample (default) with enough off-modal items, or label more.")
+    elif kappa < 0.6:
         print("  ⚠  κ < 0.6 — the judge does not agree well with humans; reconsider the judge")
         print("     model before trusting/publishing the benchmark numbers.")
     print("=" * 60)
@@ -220,6 +247,9 @@ def main() -> None:
     p.add_argument("--labels", type=Path, help="[--label/--score] template path")
     p.add_argument("--n", type=int, default=50, help="[--sample] sample size (default 50)")
     p.add_argument("--seed", type=int, default=42, help="[--sample] RNG seed (default 42)")
+    p.add_argument("--no-stratify", dest="stratify", action="store_false", default=True,
+                   help="[--sample] uniform sample instead of the default stratified "
+                        "(~half modal + ~half off-modal, so κ tests the discriminative ratings).")
     args = p.parse_args()
 
     if args.sample:

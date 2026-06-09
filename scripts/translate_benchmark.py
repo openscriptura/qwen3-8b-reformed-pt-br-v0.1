@@ -78,10 +78,15 @@ def _read_jsonl(path: Path) -> list[dict]:
         return [json.loads(l) for l in fh if l.strip()]
 
 
+# Matching quote pairs the model occasionally wraps the whole output in. Only a
+# TRUE matching pair is stripped (never a mismatched glyph), so a translation that
+# genuinely starts/ends with different quote chars is never corrupted.
+_QUOTE_PAIRS = {'"': '"', "'": "'", "“": "”"}
+
+
 def _clean(text: str) -> str:
     t = (text or "").strip()
-    # strip a single pair of wrapping quotes the model sometimes adds
-    if len(t) >= 2 and t[0] in "\"'“”" and t[-1] in "\"'“”":
+    if len(t) >= 2 and _QUOTE_PAIRS.get(t[0]) == t[-1]:
         t = t[1:-1].strip()
     return t
 
@@ -97,6 +102,10 @@ async def _translate_one(sem, client_http, api, rec, model, cost_tracker, log, l
         )
         pt = _clean(api.extract_text(resp))
         cost_tracker.add(api.estimate_cost_usd(resp, model))
+        # An empty translation (reasoning-overflow / refusal) is a FAILURE — raise so
+        # it is NOT written, and --resume retries it (done_ids counts non-empty only).
+        if not pt:
+            raise ValueError(f"empty translation for {rec['id']} (finish=length / refusal?)")
         out = dict(rec)                       # keep ALL structured fields verbatim
         out["prompt_en"] = rec["prompt"]      # preserve original for review
         out["prompt"] = pt                    # model-facing text is now pt-BR
@@ -148,13 +157,18 @@ async def run_benchmark(benchmark, dry_run, resume, model, base_url, api_key, co
                     progress.update(); log.error("❌ Error translating a prompt (skipping): %s", exc)
     progress.done()
 
-    # Canonical rewrite in the ORIGINAL id order (so the file matches the English one).
-    by_id = {r["id"]: r for r in existing + new}
+    # Canonical rewrite in the ORIGINAL id order (so the file matches the English one),
+    # keeping only non-empty translations. ATOMIC (temp + os.replace) so a crash
+    # mid-rewrite can't truncate the frozen pt-BR benchmark.
+    by_id = {r["id"]: r for r in existing + new if (r.get("prompt") or "").strip()}
     ordered = [by_id[r["id"]] for r in records if r["id"] in by_id]
-    out_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in ordered), encoding="utf-8")
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in ordered), encoding="utf-8")
+    os.replace(tmp, out_path)
     log.info("📄 Wrote %d/%d translated prompts to %s", len(ordered), len(records), out_path)
     if len(ordered) < len(records):
-        log.warning("⚠  %d prompts still untranslated — re-run with --resume.", len(records) - len(ordered))
+        log.warning("⚠  %d prompts NOT translated (empty/failed) — re-run with --resume to fill them.",
+                    len(records) - len(ordered))
 
 
 def main() -> None:

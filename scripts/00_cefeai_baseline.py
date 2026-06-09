@@ -270,6 +270,22 @@ async def run_benchmark(
                 prompts.append(json.loads(line))
     log.info("Loaded %d prompts from %s", len(prompts), benchmark_file)
 
+    # Guard: drop empty-`prompt` records (a failed translation in the pt-BR track
+    # would otherwise be sent to the model and judged as noise), and verify the
+    # pt-BR benchmark covers the SAME prompt_ids as the English source.
+    n_empty = sum(1 for p in prompts if not (p.get("prompt") or "").strip())
+    if n_empty:
+        log.warning("⚠  %d prompt(s) are empty (failed translation?) — dropped from this run.", n_empty)
+        prompts = [p for p in prompts if (p.get("prompt") or "").strip()]
+    if lang != "en":
+        en_file = _benchmark_file(benchmark, "en")
+        en_ids = {json.loads(l)["id"] for l in en_file.read_text(encoding="utf-8").splitlines() if l.strip()}
+        missing = en_ids - {p["id"] for p in prompts}
+        if missing:
+            log.warning("⚠  pt-BR benchmark missing %d/%d English prompt_ids (e.g. %s) — run "
+                        "translate_benchmark.py --resume to complete it.",
+                        len(missing), len(en_ids), sorted(missing)[:5])
+
     # --- Results paths ---
     # Tag outputs by prompt mode so the v2 (sysprompt) baseline never clobbers
     # the legacy v1 (noprompt) files — and so 07_cefeai_eval.py can find the

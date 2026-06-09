@@ -48,7 +48,9 @@ CEFEAI_LEADERBOARD = [
     ("Llama 4 Maverick",        2.0),
     ("GPT-4o",                  1.3),
     # --- Qwen family — grouped for easy comparison ---
-    ("Qwen3-8B (this run)",     4.7),
+    # (the live run is inserted by report._cefeai_reference from the official
+    # summary; the old hardcoded 4.7 "this run" row — an INVALID home-grown-rubric
+    # number — was removed.)
     ("Qwen 3.6 Flash",          6.0),
     ("Qwen 3.6 Max",            5.3),
 ]

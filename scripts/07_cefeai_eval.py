@@ -345,6 +345,19 @@ async def run_benchmark(
                 prompts.append(json.loads(line))
     log.info("Loaded %d prompts from %s", len(prompts), benchmark_file.name)
 
+    # Guard: drop empty-`prompt` records (a failed pt-BR translation would be sent
+    # to the model and judged as noise) + verify pt-BR covers the English id set.
+    n_empty = sum(1 for p in prompts if not (p.get("prompt") or "").strip())
+    if n_empty:
+        log.warning("⚠  %d prompt(s) are empty (failed translation?) — dropped from this run.", n_empty)
+        prompts = [p for p in prompts if (p.get("prompt") or "").strip()]
+    if lang != "en":
+        en_ids = {json.loads(l)["id"] for l in _benchmark_file(benchmark, "en").read_text(encoding="utf-8").splitlines() if l.strip()}
+        missing = en_ids - {p["id"] for p in prompts}
+        if missing:
+            log.warning("⚠  pt-BR benchmark missing %d/%d English prompt_ids (e.g. %s) — "
+                        "translate_benchmark.py --resume to complete it.", len(missing), len(en_ids), sorted(missing)[:5])
+
     # Output paths — named differently from baseline to avoid collision.
     # The prompt mode is part of the filename so a with-prompt run and a strict
     # baseline-comparable (no-prompt) run never share a JSONL — critical for

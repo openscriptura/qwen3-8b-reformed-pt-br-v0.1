@@ -335,10 +335,13 @@ new Chart(document.getElementById('rrLbChart'), {{
 }});"""
         return html, script
 
-    # CB: public leaderboard with OUR run placed via the non-neutral bias rate
-    # (only for a real, comparable run), + the static per-faith matrices.
-    neu = (summary.get("neutral_eq4") or {}).get("frac")
-    our_bias = round((1 - neu) * 100, 1) if (place_run and neu is not None) else None
+    # CB: public leaderboard with OUR run placed via the SAME "Total Bias %"
+    # definition CEFE.AI's matrices use — the mean over faiths of (Positive +
+    # Negative) bias — so the leaderboard bar and our per-faith matrix Total row
+    # agree (a single, consistent number; the old 1−neutral_eq4 gave a different,
+    # contradictory value). Only for a real, comparable run.
+    _fm = _our_faith_metrics(results) if place_run else None
+    our_bias = round(sum(m["total"] for m in _fm) / len(_fm), 1) if _fm else None
     base_cb = [(n, v) for n, v in CEFEAI_CB_LEADERBOARD if "this run" not in n]
     cb = sorted(base_cb + ([(this_name, our_bias)] if our_bias is not None else []),
                 key=lambda x: x[1])     # ascending: lower (less biased) first
@@ -390,10 +393,11 @@ new Chart(document.getElementById('rrLbChart'), {{
     # own data (valid in any language); only the PUBLIC-leaderboard placement above
     # is gated on `place_run` (English only).
     analysis_html, analysis_script = _faith_analysis(results, this_name) if own_run else ("", "")
-    cb_place_txt = (f"<b>{_esc(this_name)}</b> is placed via the official non-neutral rate "
-                    f"<code>1 − neutral_eq4</code> (share of responses that leaned off neutral = the "
-                    f"leaderboard's 'Total Bias %'), read from the summary — so the Qwen baseline and the "
-                    f"fine-tuned run sit on the same axis as the public models. " if place_run else "")
+    cb_place_txt = (f"<b>{_esc(this_name)}</b> is placed via its mean per-faith Total bias "
+                    f"(Positive + Negative), the SAME construction as CEFE.AI's per-faith matrices below — so "
+                    f"the bar and our matrix Total row agree, and our run sits on the same axis as the public "
+                    f"models. (CEFE.AI does not publish its exact aggregation, so treat the placement as "
+                    f"approximate.) " if place_run else "")
     html = f"""
 <h2>CEFE.AI public leaderboard — Conversion Bias (Total Bias %)</h2>
 <p class="muted">Public values from cefe.ai (captured 2026-06-07); lower = less biased. {cb_place_txt}Our run's
@@ -566,10 +570,14 @@ def generate_markdown(summary: dict, results: list[dict], benchmark: str, out_pa
     ci_s = ("—" if p["ci_low"] is None
             else f"[{p['ci_low']:.4f}, {p['ci_high']:.4f}]")
 
+    _lang = summary.get("lang", "en")
+    _lang_line = ("" if _lang == "en"
+                  else f"**Language:** `{_lang}` — ⚠️ translated SECONDARY track, **NOT leaderboard-comparable** "
+                       f"(internal baseline→fine-tuned delta is rigorous; absolute numbers are not).  \n")
     lines = [
-        f"# CEFEAI {benchmark.upper()} — {summary.get('model', '?')}",
+        f"# CEFEAI {benchmark.upper()} — {summary.get('model', '?')}" + ("" if _lang == "en" else f"  ({_lang})"),
         "",
-        f"**Generated:** {summary.get('run_at', '')}  ",
+        _lang_line + f"**Generated:** {summary.get('run_at', '')}  ",
         f"**Model:** `{summary.get('model', '?')}`  ",
         f"**Judge:** `{summary.get('judge_model', '—')}` "
         f"(max_tokens `{summary.get('judge_max_tokens', '—')}`)  ",
@@ -674,6 +682,8 @@ def generate_json_sidecar(summary: dict, results: list[dict], benchmark: str, ou
         "judge_model": summary.get("judge_model"),
         "judge_max_tokens": summary.get("judge_max_tokens"),
         "system_prompt_mode": summary.get("system_prompt_mode"),
+        "lang": summary.get("lang", "en"),
+        "leaderboard_comparable": summary.get("lang", "en") == "en" and summary.get("system_prompt_mode") == "noprompt",
         "scale": p["scale"],
         "primary_metric": p["name"],
         "primary_value": p["value"],

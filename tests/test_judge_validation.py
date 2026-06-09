@@ -94,3 +94,33 @@ def test_atomic_write_roundtrip(tmp_path):
     jv._atomic_write_jsonl(p, rows)
     assert [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] == rows
     assert not (tmp_path / "t.jsonl.tmp").exists()      # temp cleaned up
+
+
+# --- stratified sampling (κ on a neutral-dominated population) -------------------
+
+def test_stratified_sample_reaches_n_and_includes_off_modal(tmp_path):
+    # 90 neutral (modal=4) + 10 off-modal — stratified must still reach n AND pull
+    # in off-modal items so κ tests the discriminative ratings, not just neutrals.
+    rows = [{"prompt_id": f"n{i}", "prompt": "p", "response": "r", "judge_score": 4} for i in range(90)]
+    rows += [{"prompt_id": f"o{i}", "prompt": "p", "response": "r", "judge_score": (i % 6) + 1}
+             for i in range(10) if (i % 6) + 1 != 4]
+    results = tmp_path / "cb.jsonl"
+    _write_jsonl(results, rows)
+    out = tmp_path / "t.jsonl"
+    jv.do_sample(SimpleNamespace(results=results, out=out, benchmark="cb", n=20, seed=42, stratify=True))
+    key = [json.loads(l) for l in jv._key_path(out).read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(key) == 20
+    off = sum(1 for k in key if k["judge_score"] != 4)
+    assert off >= 5      # informative off-modal items are present
+
+
+# --- degenerate κ guard ---------------------------------------------------------
+
+def test_score_flags_degenerate_no_variance(tmp_path, capsys):
+    out = tmp_path / "t.jsonl"
+    _write_jsonl(out, [{"prompt_id": f"q{i}", "human_score": 4} for i in range(5)])
+    jv._key_path(out).write_text(
+        "".join(json.dumps({"prompt_id": f"q{i}", "judge_score": 4}) + "\n" for i in range(5)),
+        encoding="utf-8")
+    jv.do_score(SimpleNamespace(labels=out, benchmark="cb"))
+    assert "DEGENERATE" in capsys.readouterr().out

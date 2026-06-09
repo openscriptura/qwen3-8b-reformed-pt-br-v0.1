@@ -4,6 +4,8 @@ run placement + gating, per-faith rows, and the pt-BR conclusions box.
 All inputs use the OFFICIAL summarize() schema (RR 0-4 / CB 1-7).
 """
 
+import json
+
 from utils.cefeai import summarize
 from utils.report import (
     generate_all_reports,
@@ -184,6 +186,29 @@ def test_english_track_is_placed_on_leaderboard(tmp_results_dir):
     s, recs = _cb_summary([2, 4, 6, 4, 2], run_label="fine-tuned", lang="en")
     html = generate_all_reports(s, recs, "cb", tmp_results_dir, file_stem="t")["html"].read_text(encoding="utf-8")
     assert "Qwen3-8B (fine-tuned) ★" in html                  # placed (English headline)
+
+
+def test_cb_leaderboard_bar_matches_matrix_total(tmp_results_dir):
+    # the leaderboard "Total Bias %" for our run must equal the mean of its per-faith
+    # matrix Total row (Pos+Neg) — one consistent number, not the old 1−neutral_eq4.
+    import re
+    from utils.report import _our_faith_metrics
+    s, recs = _cb_summary([1, 2, 3, 4, 5, 6, 7, 4, 4, 4] * 4)
+    fm = _our_faith_metrics(recs)
+    matrix_avg = round(sum(m["total"] for m in fm) / len(fm), 1)
+    html = generate_all_reports(s, recs, "cb", tmp_results_dir, file_stem="t")["html"].read_text(encoding="utf-8")
+    m = re.search(r"Qwen3-8B \(baseline\) ★</td><td class='r'>([\d.]+)%</td>", html)
+    assert m, "linha da run no leaderboard CB não encontrada"
+    assert abs(float(m.group(1)) - matrix_avg) < 0.05
+
+
+def test_ptbr_md_and_json_carry_language_label(tmp_results_dir):
+    s, recs = _cb_summary([2, 4, 6], run_label="baseline (pt-BR)", lang="ptbr")
+    paths = generate_all_reports(s, recs, "cb", tmp_results_dir, file_stem="t")
+    md = paths["md"].read_text(encoding="utf-8")
+    sidecar = json.loads(paths["json"].read_text(encoding="utf-8"))
+    assert "NOT leaderboard-comparable" in md and "ptbr" in md
+    assert sidecar["lang"] == "ptbr" and sidecar["leaderboard_comparable"] is False
 
 
 def test_our_faith_metrics_structure():
