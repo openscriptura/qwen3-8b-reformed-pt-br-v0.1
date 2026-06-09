@@ -328,3 +328,80 @@ def compare_summaries(benchmark: str, baseline: dict, current: dict) -> str:
     return (f"  CB mean rating (1-7): baseline {a} → fine-tuned {c}"
             + (f"  (Δ {delta:+.3f})" if delta is not None else "")
             + "  [for a Reformed model, directional bias is by-design — interpret, don't grade]")
+
+
+# ---------------------------------------------------------------------------
+# Paired significance test (the benchmark is paired: same prompts, two models)
+# ---------------------------------------------------------------------------
+
+def paired_comparison(benchmark: str, baseline_records: list[dict], eval_records: list[dict]) -> dict:
+    """Paired baseline→fine-tuned test on per-prompt judge scores (matched by prompt_id).
+
+    The benchmark is paired (the SAME prompts are scored under both models), so the
+    correct test is on per-prompt deltas. Uses Wilcoxon signed-rank (ordinal-safe)
+    plus the mean delta with a 95% CI and a sign breakdown. Only valid integer
+    scores present on BOTH sides are paired.
+    """
+    b = {r["prompt_id"]: r["judge_score"] for r in baseline_records if isinstance(r.get("judge_score"), int)}
+    e = {r["prompt_id"]: r["judge_score"] for r in eval_records if isinstance(r.get("judge_score"), int)}
+    ids = sorted(set(b) & set(e))
+    base = [b[i] for i in ids]
+    fine = [e[i] for i in ids]
+    diffs = [f - bb for f, bb in zip(fine, base)]
+    n = len(diffs)
+    metric = "score (0-4)" if benchmark.lower() == "rr" else "rating (1-7)"
+    out = {
+        "metric": metric,
+        "n_pairs": n,
+        "baseline_mean": round(sum(base) / n, 4) if n else None,
+        "fine_tuned_mean": round(sum(fine) / n, 4) if n else None,
+        "mean_delta": round(sum(diffs) / n, 4) if n else None,
+        "mean_delta_ci": mean_ci(diffs),
+        "n_improved": sum(1 for d in diffs if d > 0),
+        "n_worsened": sum(1 for d in diffs if d < 0),
+        "n_tied": sum(1 for d in diffs if d == 0),
+    }
+    nonzero = [d for d in diffs if d != 0]
+    if nonzero:
+        try:
+            from scipy.stats import wilcoxon
+            stat, p = wilcoxon(fine, base, zero_method="wilcox", alternative="two-sided")
+            out["wilcoxon_stat"] = round(float(stat), 4)
+            out["wilcoxon_p"] = float(p)
+        except Exception as exc:                       # pragma: no cover
+            out["wilcoxon_p"] = None
+            out["wilcoxon_note"] = str(exc)
+        # matched-pairs rank-biserial effect size (sign-based, simple & robust)
+        out["rank_biserial"] = round((out["n_improved"] - out["n_worsened"]) / len(nonzero), 4)
+    else:
+        out["wilcoxon_p"] = None
+        out["wilcoxon_note"] = "all paired deltas are zero"
+    return out
+
+
+def quadratic_weighted_kappa(rater_a: list[int], rater_b: list[int],
+                             min_rating: int | None = None, max_rating: int | None = None) -> float:
+    """Quadratic-weighted Cohen's κ for ordinal ratings (judge vs human validation).
+
+    Pass the full official scale (RR 0-4, CB 1-7) via min/max so unused levels are
+    still weighted correctly. Pure Python (no sklearn dependency). κ in [-1, 1];
+    ~0.6+ = substantial agreement, ~0.8+ = near-perfect.
+    """
+    assert len(rater_a) == len(rater_b) and rater_a, "raters must be equal length and non-empty"
+    lo = min_rating if min_rating is not None else min(min(rater_a), min(rater_b))
+    hi = max_rating if max_rating is not None else max(max(rater_a), max(rater_b))
+    ratings = list(range(lo, hi + 1))
+    k = len(ratings)
+    idx = {r: i for i, r in enumerate(ratings)}
+    N = len(rater_a)
+    O = [[0] * k for _ in range(k)]
+    for x, y in zip(rater_a, rater_b):
+        O[idx[x]][idx[y]] += 1
+    denom_w = (k - 1) ** 2 if k > 1 else 1
+    W = [[((i - j) ** 2) / denom_w for j in range(k)] for i in range(k)]
+    row = [sum(O[i]) for i in range(k)]
+    col = [sum(O[i][j] for i in range(k)) for j in range(k)]
+    E = [[row[i] * col[j] / N for j in range(k)] for i in range(k)]
+    num = sum(W[i][j] * O[i][j] for i in range(k) for j in range(k))
+    den = sum(W[i][j] * E[i][j] for i in range(k) for j in range(k))
+    return round(1.0 - num / den, 4) if den else 1.0

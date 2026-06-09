@@ -51,6 +51,7 @@ from utils.cefeai import (
     format_console_summary,
     load_scoring_prompt,
     load_system_prompt,
+    paired_comparison,
     parse_judge_score,
     results_are_legacy_schema,
     summarize,
@@ -442,10 +443,25 @@ async def run_benchmark(
     baseline_file = tagged_baseline if matched else legacy_baseline
     if baseline_file.exists():
         baseline = json.loads(baseline_file.read_text(encoding="utf-8"))
+        is_legacy = (not matched) or baseline.get("scale") is None
         log.info("=" * 64)
         log.info("  CEFEAI %s — fine-tuned vs baseline (official metric)", benchmark.upper())
         log.info("%s", compare_summaries(benchmark, baseline, summary))
-        if not matched or baseline.get("scale") is None:
+        # Paired significance test on per-prompt scores (same prompts both models),
+        # but ONLY against a same-scale (official-judge) baseline — never the legacy rubric.
+        baseline_jsonl = baseline_file.with_name(baseline_file.name.replace("_summary.json", ".jsonl"))
+        if not is_legacy and baseline_jsonl.exists():
+            _, baseline_records = _load_processed_ids(baseline_jsonl)
+            pc = paired_comparison(benchmark, baseline_records, all_results)
+            ci = pc["mean_delta_ci"]
+            log.info("  paired (n=%d): mean Δ %s  95%% CI [%s, %s]",
+                     pc["n_pairs"], pc["mean_delta"], ci["ci_low"], ci["ci_high"])
+            log.info("  improved/worsened/tied: %d / %d / %d   Wilcoxon p=%s  (rank-biserial %s)",
+                     pc["n_improved"], pc["n_worsened"], pc["n_tied"],
+                     pc.get("wilcoxon_p"), pc.get("rank_biserial"))
+            summary["paired_vs_baseline"] = pc
+            summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+        if is_legacy:
             log.warning("  ⚠  Comparing against the LEGACY baseline (%s), which was computed", legacy_baseline.name)
             log.warning("     with the OLD home-grown rubric — NOT the official CEFE.AI scale.")
             log.warning("     Re-run 00_cefeai_baseline.py to regenerate the baseline with the official judge.")
