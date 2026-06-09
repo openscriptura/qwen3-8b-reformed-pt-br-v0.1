@@ -69,6 +69,8 @@ Two fatal problems for using v2 as the headline:
 
 ## Evaluation — two language tracks (English headline + pt-BR product)
 
+> **Rationale (what each track answers, and why keep both): [`docs/EVALUATION_PROTOCOL.md` §6](docs/EVALUATION_PROTOCOL.md#6-dois-tracks-de-idioma--inglês-âncora-científica--pt-br-verdade-de-produto).** TL;DR: **pt-BR = headline de produto** (mede o uso real); **inglês = âncora científica** (comparável ao leaderboard). Os dois, sem trocar.
+
 The deployed model is **Brazilian Portuguese**, but the CEFE.AI leaderboard is **English**. So we run two tracks (`--lang`), with English as the comparable headline:
 
 | Track | Benchmark | Role | Comparable to leaderboard? |

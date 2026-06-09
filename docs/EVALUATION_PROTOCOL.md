@@ -64,3 +64,20 @@ baseline and the fine-tuned model — only the weights differ.
 - `scripts/00_cefeai_baseline.py` & `07_cefeai_eval.py`: model `max_tokens=1024`; judge `enable_thinking=False`, `max_tokens=1024` (raised from 256 — see §3 above).
 - `.env.example`: judge-model guidance (strong, non-Qwen, pinned).
 - Still TODO (analysis steps, not blockers): the paired significance test at comparison time, and the κ judge-validation sample.
+
+## 6. Dois tracks de idioma — inglês (âncora científica) + pt-BR (verdade de produto)
+
+**Decisão (2026-06-09, com o usuário): fazer os dois, com ênfases diferentes — porque respondem a perguntas diferentes.** Implementado via `--lang {en,ptbr}` (ver `00`/`07`/`translate_benchmark.py`).
+
+| Track | Pergunta que responde | Papel |
+|-------|-----------------------|-------|
+| **Inglês (CEFE.AI oficial)** | "Isso é uma contribuição científica vs o estado da arte (Grok, GPT-5, etc.)?" | **Âncora científica** — comparável ao leaderboard, é o número que o mundo verifica (paper/arXiv, credibilidade). |
+| **Português (traduzido)** | "Isso é bom para o meu usuário real (brasileiro, reformado, em português)?" | **Verdade de produto** — mede exatamente o objetivo de deploy. |
+
+**Para o objetivo do projeto, o track pt-BR é o que de fato importa.** Ele mede o cenário real (pergunta PT → resposta PT reformada). É o número que vai no **model card** e que justifica o produto.
+
+**Mas não largar o inglês** — ele é barato (~$1,13) e é a **única** forma de dizer "subimos a representação CEFE.AI em N pontos" de modo comparável ao leaderboard público. Sem ele, perde-se a credibilidade científica.
+
+**Caveat técnico a observar na Phase 4:** o modelo fine-tuned provavelmente vai responder **em português mesmo às perguntas em inglês** (porque foi treinado pt-BR). No track inglês isso é **OK** — o juiz mede *representação religiosa*, não idioma — mas é mais um motivo pelo qual o **track pt-BR é o mais natural e fiel** ao que se quer.
+
+**Resumo:** **pt-BR = headline de produto** (o que se quer); **inglês = âncora científica** (o que torna verificável). **Os dois, sem trocar um pelo outro.** O delta interno é rigoroso nos dois (mesmo juiz/settings em ambos os lados); só os **absolutos** do pt-BR não são leaderboard-comparable (benchmark traduzido = benchmark diferente). κ valida o juiz **nos dois idiomas**.
