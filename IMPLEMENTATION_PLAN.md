@@ -257,18 +257,20 @@ All training records use this schema. `lang` (BCP 47, short form) and `messages`
 
 ### Phase 2 final results
 
+_Exact `eval_all_loss` read from `results/exp_*_results.json` (2026-06-08):_
+
 | Config | r | α | LR | eval_all_loss | Tier B | Tier C | best step |
 |--------|---|---|----|---------------|--------|--------|-----------|
 | **exp_c** | 64 | 128 | 2e-4 | **0.6527** ✅ | 0.6841 | 0.5728 | 350 |
 | exp_d | 64 | 128 | 1e-4 | 0.6586 | 0.6870 | 0.5858 | 350 |
-| exp_a | 16 | 32 | 2e-4 | ~0.69 | 0.6924 | 0.5910 | — |
-| exp_b | 16 | 32 | 1e-4 | 0.6993 | 0.6993 | 0.5990 | 450 |
+| exp_a | 16 | 32 | 2e-4 | 0.6640 | 0.6924 | 0.5910 | 350 |
+| exp_b | 16 | 32 | 1e-4 | 0.6709 | 0.6993 | 0.5990 | 500 |
 
 **Findings (3-panel review of 77 PhDs each):**
-- **Rank dominates LR.** r=64 beats r=16 by ~0.04 eval_loss in both LR settings — an unambiguous, consistent signal. The Reformed PT-BR corpus needs the extra adapter capacity.
-- **LR effect is marginal within r=64** (exp_c vs exp_d = 0.006, below the ~0.01 training-noise threshold). exp_c and exp_d are statistically near-equivalent; exp_c chosen on the (small) numeric edge, exp_d is the safer-stability fallback.
+- **Both rank and LR help; rank ~2× the LR effect, but both are small.** Best r=64 (exp_c 0.6527) vs best r=16 (exp_a 0.6640) = Δ**0.011**; LR effect within a rank ≈0.006–0.007. `lr=2e-4` wins in both ranks and `r=64` wins in both LRs, so **exp_c (r=64, lr=2e-4)** is the unambiguous winner. *(An earlier draft cited Δ≈0.04 — that was a data error: exp_b's Tier-B value 0.6993 was mistakenly used as its eval_all_loss; the real exp_b eval_all is 0.6709.)*
+- **exp_c vs exp_d (within r=64) = 0.006** — near the training-noise threshold; exp_d is the safer-stability fallback.
 - **Tier C learns faster than Tier B** (gap ~0.10 in every config) — catechisms are structurally uniform; synthetic Tier B has higher style variance.
-- Best step = 350/537 (~65%) for both r=64 configs → the data signal is exhausted before the end; Phase 3 uses early stopping to catch the true optimum.
+- Best step ≈350 for three configs (exp_b at 500) → the data signal is largely exhausted by ~65% of training; Phase 3 uses early stopping to catch the true optimum.
 
 `configs/final.yaml` encodes the exp_c winner for Phase 3.
 

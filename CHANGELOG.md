@@ -96,14 +96,15 @@ real v2 RR was 99.3% — trust `results/..._summary.json`, not the leaderboard i
 - `04_experiment.py` (YAML-driven QLoRA) ran the full **2×2 matrix** on vast.ai RTX 4090 (~6.5h, ~$3.50).
 - **Winner: exp_c (r=64, lr=2e-4)** — eval_all_loss **0.6527** @ step 350.
 
-  | Config | r | LR | eval_all_loss |
-  |--------|---|----|---------------|
-  | **exp_c** | 64 | 2e-4 | **0.6527** ✅ |
-  | exp_d | 64 | 1e-4 | 0.6586 |
-  | exp_a | 16 | 2e-4 | ~0.69 |
-  | exp_b | 16 | 1e-4 | 0.6993 |
+  | Config | r | LR | eval_all_loss | best step |
+  |--------|---|----|---------------|-----------|
+  | **exp_c** | 64 | 2e-4 | **0.6527** ✅ | 350 |
+  | exp_d | 64 | 1e-4 | 0.6586 | 350 |
+  | exp_a | 16 | 2e-4 | 0.6640 | 350 |
+  | exp_b | 16 | 1e-4 | 0.6709 | 500 |
 
-- **Finding:** rank dominates LR (r=64 ≫ r=16, Δ≈0.04); LR effect within r=64 is marginal (Δ=0.006).
+  _(exact values from `results/exp_*_results.json`)_
+- **Finding:** both rank and LR help, rank ~2× more, both small — best r=64 (0.6527) vs best r=16 (0.6640) = Δ0.011; LR effect within a rank ≈0.006. exp_c wins on both axes. *(An earlier draft said Δ≈0.04 — a data error: exp_b's Tier-B 0.6993 was used as its eval_all; real exp_b eval_all = 0.6709.)*
 - Instance destroyed; all adapters + `results.json` archived under `results/`.
 - Bugs fixed mid-flight → Lessons **#7–#11** (flash_attn→eager, OOM→batch=1/grad_accum=16/grad-ckpt,
   `metric_for_best_model` dict-eval naming, `label_names=[]` breaking eval loss,

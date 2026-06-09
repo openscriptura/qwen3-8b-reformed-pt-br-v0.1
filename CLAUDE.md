@@ -119,14 +119,16 @@ arXiv / HuggingFace publication 🔲
 
 ### Phase 2 results (final — all 4 configs complete)
 
+_Exact values read from `results/exp_*_results.json` (2026-06-08):_
+
 | Config | r | LR | eval_all_loss | Tier B | Tier C | best step |
 |--------|---|----|---------------|--------|--------|-----------|
 | **exp_c** | 64 | 2e-4 | **0.6527** ✅ | 0.6841 | 0.5728 | 350 |
 | exp_d | 64 | 1e-4 | 0.6586 | 0.6870 | 0.5858 | 350 |
-| exp_a | 16 | 2e-4 | ~0.69 | 0.6924 | 0.5910 | — |
-| exp_b | 16 | 1e-4 | 0.6993 | 0.6993 | 0.5990 | 450 |
+| exp_a | 16 | 2e-4 | 0.6640 | 0.6924 | 0.5910 | 350 |
+| exp_b | 16 | 1e-4 | 0.6709 | 0.6993 | 0.5990 | 500 |
 
-Verdict: **rank dominates LR** (r=64 ≫ r=16, Δ≈0.04); within r=64 the LR effect is small (Δ=0.006). `configs/final.yaml` uses the exp_c winner. Adapters + results for all four are archived in `results/`.
+Verdict: **both rank and LR help, rank ~2× more — but both effects are small.** Best r=64 (0.6527) vs best r=16 (0.6640) = Δ**0.011**; LR effect within a rank ≈0.006–0.007. `lr=2e-4` wins in both ranks; `r=64` wins in both LRs → **exp_c (r=64, lr=2e-4)** is the unambiguous winner. `configs/final.yaml` uses it. Adapters + results for all four archived in `results/`.
 
 ### Data Schema (canonical — chat format)
 
