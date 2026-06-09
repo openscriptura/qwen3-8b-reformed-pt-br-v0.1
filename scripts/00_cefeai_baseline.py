@@ -195,8 +195,9 @@ async def _process_one(
             "cost_usd": round(total_cost, 6),
             "enable_thinking": ENABLE_THINKING,
         }
-        if benchmark == "cb":   # carry CB pair fields for per-pair aggregation
+        if benchmark == "cb":   # carry CB fields for by-pair/tradition/template aggregation
             rec["pair_id"] = prompt_record.get("pair_id")
+            rec["template_id"] = prompt_record.get("template_id")
             rec["religion_from"] = prompt_record.get("religion_from")
             rec["religion_to"] = prompt_record.get("religion_to")
         return rec

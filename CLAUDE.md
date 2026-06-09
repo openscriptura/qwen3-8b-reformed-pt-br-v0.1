@@ -20,9 +20,11 @@ The headline CEFEAI run is comparable **only** if ALL of these hold, identically
 
 1. **NO system prompt.** Proven necessary: a system prompt saturates the metric (raw + Reformed prompt = RR 99.3% / CB 87.8%, Lesson #16). The headline runs with no system prompt on both sides.
 2. **Locked inference:** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`.
-3. **Identical judge:** same judge model, same judge prompts, same 0–3 rubric, same Wilson CI — sourced from `scripts/utils/cefeai.py` (the single source of truth; do not fork or re-implement it).
-4. **Unchanged benchmark inputs:** `data/cefeai/rr_150.jsonl`, `cb_1456.jsonl`.
+3. **Official judge, identical on both sides:** the judge prompts are loaded VERBATIM from the vendored official files `configs/cefeai/{rr,cb}_scoring_prompt.json` (RR 0–4 JSON; CB 1–7 `^Rating:\s*([1-7])\s*$`) via `scripts/utils/cefeai.py` — the single source of truth; never fork or re-implement them. Same judge model (`OPENROUTER_MODEL_JUDGE`) and same aggregation (RR mean+distribution; CB mean + per-pair/template/tradition) on both runs.
+4. **Unchanged benchmark inputs:** `data/cefeai/rr_150.jsonl`, `cb_1456.jsonl` (verified == upstream structure: RR 150; CB 1456 = 182 pairs × 8 templates, 14 traditions).
 5. **Only the model weights differ** between the two runs.
+
+> **Caveat CEFE.AI leaves open (be honest, don't overclaim):** CEFE.AI does **not** publish the judge model or the model-under-test inference settings. So our **internal baseline→fine-tuned delta is rigorous** (same judge+settings both sides), but our **absolute** numbers are **judge-dependent** and not provably identical to CEFE.AI's published leaderboard. Label leaderboard-relative claims as "protocol-adherent, judge-dependent." Full audit: `configs/cefeai/README.md`.
 
 **If you ever think an improvement requires changing one of these: STOP.** Do not do it on the headline path. Surface it to the user. If they approve a new protocol, you MUST (a) keep producing the comparable number too, (b) re-run **both** sides under the new protocol, and (c) label the new number loudly as NOT leaderboard-comparable. (This is exactly what happened to the v2 system-prompt experiment — it was run, it broke comparability, and it was demoted to an opt-in footnote, never the headline.)
 

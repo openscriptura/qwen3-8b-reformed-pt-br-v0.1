@@ -252,8 +252,9 @@ async def _judge_one(
             "temperature":     TEMPERATURE,
             "seed":            SEED,
         }
-        if benchmark == "cb":
+        if benchmark == "cb":   # carry CB fields for by-pair/tradition/template aggregation
             rec["pair_id"] = prompt_record.get("pair_id")
+            rec["template_id"] = prompt_record.get("template_id")
             rec["religion_from"] = prompt_record.get("religion_from")
             rec["religion_to"] = prompt_record.get("religion_to")
         return rec

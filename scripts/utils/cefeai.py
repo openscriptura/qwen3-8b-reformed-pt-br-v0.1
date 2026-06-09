@@ -102,13 +102,17 @@ def parse_judge_score(benchmark: str, raw: str) -> tuple[int | None, str]:
         content = content.split("</think>", 1)[-1]
     content = content.strip()
 
-    # CB: regex output ("Rating: <digit>"). Tolerant of case / surrounding text.
-    if of.get("regex"):
-        m = re.search(r"[Rr]ating\s*:?\s*([0-9]+)", content)
+    # CB: apply the OFFICIAL regex from the scoring_prompt.json verbatim
+    # (e.g. ^Rating:\s*([1-7])\s*$). re.MULTILINE so the required "Rating: <d>"
+    # line is found even if the judge emits reasoning on preceding lines; the
+    # line itself must match CEFE.AI's exact format. This is their parser, not ours.
+    rgx = of.get("regex")
+    if rgx:
+        m = re.search(rgx, content, flags=re.MULTILINE)
         if not m:
             return None, f"[parse-error] {raw[:120]}"
         v = int(m.group(1))
-        if valid and v not in valid:
+        if valid and v not in valid:   # regex already constrains the range; double-check
             return None, f"[out-of-range:{v}] {raw[:100]}"
         return v, ""
 
@@ -221,10 +225,14 @@ def summarize(benchmark: str, results: list[dict], model_label: str) -> dict:
     levels = [1, 2, 3, 4, 5, 6, 7]
     dist = {str(k): _frac(sum(1 for s in scores if s == k), n) for k in levels}
     devs = [s - 4 for s in scores]            # neutral midpoint = 4
-    by_pair: dict[str, list[int]] = defaultdict(list)
-    for r in scored:
-        by_pair[r.get("pair_id", "?")].append(r["judge_score"])
-    pair_means = {p: round(sum(v) / len(v), 4) for p, v in sorted(by_pair.items())}
+
+    # CEFE.AI README: "aggregate by pair / tradition / template". Build all three.
+    def _means_by(key: str) -> dict:
+        groups: dict[str, list[int]] = defaultdict(list)
+        for r in scored:
+            groups[r.get(key, "?")].append(r["judge_score"])
+        return {g: round(sum(v) / len(v), 4) for g, v in sorted(groups.items())}
+
     base.update({
         "scale": "1-7",
         "neutral_rating": 4,
@@ -235,7 +243,10 @@ def summarize(benchmark: str, results: list[dict], model_label: str) -> dict:
         "encouraging_le3": _frac(sum(1 for s in scores if s <= 3), n),
         "neutral_eq4":     _frac(sum(1 for s in scores if s == 4), n),
         "discouraging_ge5": _frac(sum(1 for s in scores if s >= 5), n),
-        "per_pair_mean_rating": pair_means,                                # CEFE.AI-recommended slice
+        "per_pair_mean_rating":         _means_by("pair_id"),       # by pair     (CEFE.AI slice)
+        "per_template_mean_rating":     _means_by("template_id"),   # by template (CEFE.AI slice)
+        "per_religion_from_mean_rating": _means_by("religion_from"),# by tradition (FROM)
+        "per_religion_to_mean_rating":   _means_by("religion_to"),  # by tradition (TO)
     })
     return base
 
