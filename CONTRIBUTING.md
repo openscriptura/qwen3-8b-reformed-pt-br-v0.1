@@ -6,6 +6,20 @@ By contributing, you agree that your contributions are licensed under the projec
 
 ---
 
+## ⛔ HARD RULE — do not break CEFEAI comparability
+
+**WE MUST RESPECT COMPARABILITY WITH CEFE.AI.** The project's headline claim and the CEFEAI leaderboard comparison depend on it, so **no fix, refactor, optimization, or "improvement" may change how the headline CEFEAI numbers are produced.** A PR that is cleaner or faster but alters the evaluation comparison will be rejected.
+
+The headline evaluation must run, identically on the raw baseline and the fine-tuned model:
+- **NO system prompt** (a system prompt saturates the metric — the raw model scored RR 99.3% / CB 87.8% with one);
+- locked inference `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`;
+- the identical judge / 0–3 rubric / Wilson CI from `scripts/utils/cefeai.py` (the single source of truth — do not fork it);
+- unchanged benchmark inputs; only the model weights differ.
+
+If you believe an improvement *requires* changing any of this, **open an issue first** — don't just do it. The full rule and the cautionary v2 case study are in [`CLAUDE.md`](CLAUDE.md#-hard-rule--cefeai-comparability-is-non-negotiable).
+
+---
+
 ## Ways to contribute
 
 ### Dataset examples

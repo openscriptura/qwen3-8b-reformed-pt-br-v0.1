@@ -1,5 +1,11 @@
 # OpenScriptura — Implementation Plan
-> Consenso dos 539 PhDs. Última revisão: 2026-06-08. Phase 2 complete; Phase 3/4 scripts written; **evaluation protocol upgraded to v2 (re-baseline with system prompt)**.
+> Consenso dos 539 PhDs. Última revisão: 2026-06-08. Phase 2 complete; Phase 3/4 scripts written; **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
+
+---
+
+## ⛔ HARD RULE — CEFEAI comparability is NON-NEGOTIABLE
+
+**WE MUST RESPECT COMPARABILITY WITH CEFE.AI.** The project's entire claim and the leaderboard comparison depend on it. **No fix, refactor, optimization, or "improvement" may break it.** The headline CEFEAI numbers must be produced with: **NO system prompt** (both sides), `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`, the identical judge/rubric/Wilson-CI from `scripts/utils/cefeai.py`, the unchanged benchmark inputs, and **only the model weights differing** between baseline and fine-tuned. If you think an improvement needs to change any of this: **STOP, ask the user**, and if approved, keep the comparable number, re-run both sides, and label the new one as NOT leaderboard-comparable. Full statement of this rule lives in [`CLAUDE.md`](CLAUDE.md#-hard-rule--cefeai-comparability-is-non-negotiable). The v2 system-prompt experiment is the cautionary tale (see below).
 
 ---
 

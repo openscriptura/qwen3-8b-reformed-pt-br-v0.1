@@ -10,6 +10,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **Evaluation protocol — headline is v1 (NO system prompt).** We briefly tried "protocol v2" (put the Reformed system prompt on both sides). The v2 run proved it wrong empirically: the prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%**. That (a) isn't comparable to the prompt-free CEFEAI leaderboard and (b) leaves no headroom to show what fine-tuning added. So the headline/comparable protocol is **v1: no system prompt, both sides** (`scripts/00` and `07` default to this; `--system-prompt` opts into v2). v2 is retained only as an opt-in **deployment-behavior** datapoint, never a leaderboard number. See IMPLEMENTATION_PLAN.md → "Evaluation protocol — v1 vs v2" and Lessons #14–#16.
 
+## ⛔ HARD RULE — CEFEAI comparability is NON-NEGOTIABLE
+
+**Read this before changing anything that touches evaluation.** This is the single most important constraint in the project.
+
+**WE MUST RESPECT COMPARABILITY WITH CEFE.AI.** The entire scientific claim — *"fine-tuning improved CEFEAI representation by N points"* — and the leaderboard comparison depend on it. **No fix, refactor, optimization, cleanup, or "improvement" may break it.** A change that is "better" code but alters how the headline CEFEAI numbers are produced is **forbidden** — full stop.
+
+The headline CEFEAI run is comparable **only** if ALL of these hold, identically on BOTH the raw baseline and the fine-tuned model:
+
+1. **NO system prompt.** Proven necessary: a system prompt saturates the metric (raw + Reformed prompt = RR 99.3% / CB 87.8%, Lesson #16). The headline runs with no system prompt on both sides.
+2. **Locked inference:** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`.
+3. **Identical judge:** same judge model, same judge prompts, same 0–3 rubric, same Wilson CI — sourced from `scripts/utils/cefeai.py` (the single source of truth; do not fork or re-implement it).
+4. **Unchanged benchmark inputs:** `data/cefeai/rr_150.jsonl`, `cb_1456.jsonl`.
+5. **Only the model weights differ** between the two runs.
+
+**If you ever think an improvement requires changing one of these: STOP.** Do not do it on the headline path. Surface it to the user. If they approve a new protocol, you MUST (a) keep producing the comparable number too, (b) re-run **both** sides under the new protocol, and (c) label the new number loudly as NOT leaderboard-comparable. (This is exactly what happened to the v2 system-prompt experiment — it was run, it broke comparability, and it was demoted to an opt-in footnote, never the headline.)
+
+**Protected asset:** the v1 baseline (RR 4.7% / CB 19.6%, no prompt) is the reference. Never overwrite or delete it — archived at `results/v1_baseline_archive/`.
+
 ## Commands
 
 ```bash
