@@ -52,6 +52,7 @@ from utils.cefeai import (
     load_scoring_prompt,
     load_system_prompt,
     parse_judge_score,
+    results_are_legacy_schema,
     summarize,
 )
 from utils.cost_tracker import CostLimitExceeded, CostTracker
@@ -339,6 +340,12 @@ async def run_benchmark(
     processed_ids, existing_results = set(), []
     if resume:
         processed_ids, existing_results = _load_processed_ids(results_file)
+        if existing_results and results_are_legacy_schema(existing_results):
+            log.error("%s holds results from the OLD judge rubric (pre-official CEFE.AI scale).", results_file)
+            log.error("Delete it and re-run — merging old scores into the new aggregate would corrupt the summary.")
+            if not dry_run:
+                sys.exit(1)
+            log.warning("[DRY-RUN] (a real run would abort here until the stale file is removed)")
         if processed_ids:
             log.info("Resuming: %d prompts already done.", len(processed_ids))
 

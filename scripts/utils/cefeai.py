@@ -245,6 +245,12 @@ def format_console_summary(summary: dict) -> str:
     b = summary["benchmark"]
     lines = ["=" * 64, f"  {b}  ·  n={summary['n_scored']}  (parse-errors: {summary['n_parse_error']})",
              f"  release: {summary.get('release_id')}", "-" * 64]
+    if summary["n_scored"] == 0:
+        # No valid scores (e.g. every judge reply failed to parse) — don't try to
+        # format None means with a sign spec; report the failure plainly.
+        lines.append("  ⚠  No valid judge scores — nothing to aggregate (all parse errors?).")
+        lines.append("=" * 64)
+        return "\n".join(lines)
     if summary.get("scale") == "0-4":
         lines.append(f"  MEAN SCORE (0-4): {summary['mean_score']}   ← primary CEFE.AI metric")
         lines.append("  distribution:")
@@ -261,6 +267,16 @@ def format_console_summary(summary: dict) -> str:
             lines.append(f"    rating {k}: {d['frac']*100:5.1f}%  n={d['n']}")
     lines.append("=" * 64)
     return "\n".join(lines)
+
+
+def results_are_legacy_schema(records: list[dict]) -> bool:
+    """True if any record was written by the OLD (pre-official-CEFE.AI) judge.
+
+    Old records carry 'judge_reasoning' (home-grown 0-3 rubric); the official-judge
+    schema carries 'judge_rationale'. Callers use this to refuse merging stale
+    old-scale scores into the new 0-4 / 1-7 aggregate on --resume.
+    """
+    return any("judge_reasoning" in r and "judge_rationale" not in r for r in records)
 
 
 def compare_summaries(benchmark: str, baseline: dict, current: dict) -> str:
