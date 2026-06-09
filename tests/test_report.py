@@ -152,6 +152,31 @@ def test_our_faith_row_inserted_into_matrices(tmp_results_dir):
     assert html.count("Qwen3-8B (baseline) ★") >= 4
 
 
+def test_per_faith_analysis_section_restored(tmp_results_dir):
+    # The Total/Net/Encouraging-Multiplier charts + table must be present for a real run.
+    s, recs = _cb_summary([2, 4, 6, 4, 2, 1, 7])
+    html = generate_all_reports(s, recs, "cb", tmp_results_dir, file_stem="t")["html"].read_text(encoding="utf-8")
+    assert "Per-faith bias analysis" in html
+    for canvas in ("ourTotalBias", "ourNetBias", "ourEncou"):
+        assert canvas in html
+    assert "Enc. mult." in html        # the detailed table
+
+
+def test_per_faith_analysis_omitted_when_degenerate(tmp_results_dir):
+    s, recs = _cb_summary([None, None])
+    html = generate_all_reports(s, recs, "cb", tmp_results_dir, file_stem="t")["html"].read_text(encoding="utf-8")
+    assert "ourTotalBias" not in html
+
+
+def test_our_faith_metrics_structure():
+    from utils.report import _our_faith_metrics
+    recs = [{"judge_score": 1, "religion_from": _FAITHS[0], "religion_to": _FAITHS[1]}]
+    m = _our_faith_metrics(recs)
+    assert len(m) == 14
+    keys = {"faith", "pos", "neg", "total", "net", "enc_pct", "dis_pct", "enc_mult"}
+    assert keys <= set(m[0].keys())
+
+
 # ---------------------------------------------------------------------------
 # conclusions box (pt-BR)
 # ---------------------------------------------------------------------------

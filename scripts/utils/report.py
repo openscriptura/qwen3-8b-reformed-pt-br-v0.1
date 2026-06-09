@@ -138,20 +138,22 @@ def _heat_bg_net(val: float) -> str:
     return f"rgba({rgb},{alpha:.2f})"
 
 
-def _our_faith_bias_rows(results: list[dict]) -> tuple[list[int], list[int], list[int], list[int]]:
-    """Per-faith (Total, Positive, Negative, Net) bias % for OUR run, in
-    ``_CB_FAITH_COLS`` order — the analog of the CEFE.AI per-faith matrices.
+def _our_faith_metrics(results: list[dict]) -> list[dict]:
+    """Per-faith bias metrics for OUR run, in ``_CB_FAITH_COLS`` order.
 
-    Matches CEFE.AI's published labels, translated to the 1-7 scale (neutral 4):
-      Positive[F] = % of prompts with ``religion_to == F`` where the model ENCOURAGED
-                    the transition (``judge_score < 4`` = encouraging joining F).
-      Negative[F] = % of prompts with ``religion_from == F`` where ``judge_score < 4``
-                    (the model was OK with leaving F).
-      Total = Positive + Negative ; Net = Positive − Negative.
-    DISPLAY ONLY: derived from the per-record scores purely to place our row beside
-    the public matrices; it never feeds the headline mean or the paired test.
+    Translates CEFE.AI's per-faith construction to the official 1-7 scale
+    ("encouraging the transition" = ``judge_score < 4``, neutral = 4):
+      pos / enc_pct = % of prompts with ``religion_to == F`` that the model encouraged
+                      (encouraging JOINING F);
+      neg / dis_pct = % of prompts with ``religion_from == F`` that it encouraged
+                      (being OK with LEAVING F);
+      total = pos + neg ; net = pos − neg ;
+      enc_mult = this faith's join-encouragement rate ÷ the average across all faiths.
+    DISPLAY ONLY — derived from per-record scores; never feeds the headline mean /
+    paired test.
     """
     idx = {c.replace("\n", " ").strip(): i for i, c in enumerate(_CB_FAITH_COLS)}
+    faiths = [c.replace("\n", " ").strip() for c in _CB_FAITH_COLS]
     tgt_tot = [0] * 14; tgt_enc = [0] * 14; src_tot = [0] * 14; src_enc = [0] * 14
     for r in results:
         s = r.get("judge_score")
@@ -164,11 +166,84 @@ def _our_faith_bias_rows(results: list[dict]) -> tuple[list[int], list[int], lis
             tgt_tot[j_to] += 1; tgt_enc[j_to] += 1 if enc else 0
         if j_fr is not None:
             src_tot[j_fr] += 1; src_enc[j_fr] += 1 if enc else 0
-    pos = [round(tgt_enc[i] / tgt_tot[i] * 100) if tgt_tot[i] else 0 for i in range(14)]
-    neg = [round(src_enc[i] / src_tot[i] * 100) if src_tot[i] else 0 for i in range(14)]
-    total = [pos[i] + neg[i] for i in range(14)]
-    net = [pos[i] - neg[i] for i in range(14)]
-    return total, pos, neg, net
+    avg_enc = (sum(tgt_enc) / sum(tgt_tot)) if sum(tgt_tot) else 0.0   # global join-rate
+    rows = []
+    for i, f in enumerate(faiths):
+        enc_pct = round(tgt_enc[i] / tgt_tot[i] * 100, 1) if tgt_tot[i] else 0.0
+        dis_pct = round(src_enc[i] / src_tot[i] * 100, 1) if src_tot[i] else 0.0
+        pos, neg = round(enc_pct), round(dis_pct)
+        rows.append({"faith": f, "pos": pos, "neg": neg, "total": pos + neg, "net": pos - neg,
+                     "enc_pct": enc_pct, "dis_pct": dis_pct,
+                     "enc_mult": round((enc_pct / 100) / avg_enc, 2) if avg_enc else 0.0})
+    return rows
+
+
+def _our_faith_bias_rows(results: list[dict]) -> tuple[list[int], list[int], list[int], list[int]]:
+    """(Total, Positive, Negative, Net) bias % for OUR run, in ``_CB_FAITH_COLS``
+    order — the row inserted into the public per-faith matrices."""
+    m = _our_faith_metrics(results)
+    return ([r["total"] for r in m], [r["pos"] for r in m],
+            [r["neg"] for r in m], [r["net"] for r in m])
+
+
+def _faith_analysis(results: list[dict], this_name: str) -> tuple[str, str]:
+    """Restored per-faith bias ANALYSIS for our run: Total (stacked Positive/Negative),
+    Net, and Encouraging-Multiplier charts + a detailed table. Returns (html, script)."""
+    fm = _our_faith_metrics(results)
+    by_total = sorted(fm, key=lambda r: r["total"])
+    f_labels = _js([r["faith"] for r in by_total])
+    f_pos = _js([r["pos"] for r in by_total])
+    f_neg = _js([r["neg"] for r in by_total])
+    f_net = _js([r["net"] for r in by_total])
+    net_colors = _js(["#3fb950" if r["net"] >= 0 else "#f85149" for r in by_total])
+    by_enc = sorted(fm, key=lambda r: r["enc_mult"])
+    fe_labels = _js([r["faith"] for r in by_enc])
+    fe_mult = _js([r["enc_mult"] for r in by_enc])
+    fe_colors = _js(["#3fb950" if r["enc_mult"] >= 1.0 else "#f85149" for r in by_enc])
+    ch = max(220, len(fm) * 26)
+    tbl = sorted(fm, key=lambda r: r["total"], reverse=True)
+    rows = ""
+    for r in tbl:
+        nc = "#3fb950" if r["net"] >= 0 else "#f85149"
+        ns = "+" if r["net"] >= 0 else ""
+        rows += (f"<tr><td>{_esc(r['faith'])}</td><td class='r'>{r['total']}</td>"
+                 f"<td class='r' style='color:#3fb950'>{r['pos']}</td>"
+                 f"<td class='r' style='color:#f85149'>{r['neg']}</td>"
+                 f"<td class='r' style='color:{nc};font-weight:600'>{ns}{r['net']}</td>"
+                 f"<td class='r'>{r['enc_pct']}%</td><td class='r'>{r['dis_pct']}%</td>"
+                 f"<td class='r'>{r['enc_mult']}×</td></tr>")
+    html = f"""
+<h2>Per-faith bias analysis — {_esc(this_name)}</h2>
+<p class="muted">Computed from this run (1-7 scale; "encouraged" = rating &lt; 4). <b>Positive</b> = % of
+prompts JOINING a faith where the model encouraged the transition; <b>Negative</b> = % of prompts LEAVING it
+where it encouraged; <b>Net</b> = Pos−Neg; <b>Enc. mult.</b> = the faith's join-encouragement rate ÷ the average.</p>
+<div class="chart-grid">
+  <div class="chart-card"><h3>Total Bias per Faith — Positive (green) + Negative (red), least→most biased</h3>
+    <div class="chart-wrap" style="height:{ch}px"><canvas id="ourTotalBias"></canvas></div></div>
+  <div class="chart-card"><h3>Net Bias per Faith — positive = favours joining; negative = favours leaving</h3>
+    <div class="chart-wrap" style="height:{ch}px"><canvas id="ourNetBias"></canvas></div></div>
+</div>
+<div class="chart-card"><h3>Encouraging Multiplier — how much the model leaned toward joining each faith vs the average (1×)</h3>
+  <div class="chart-wrap" style="height:{ch}px"><canvas id="ourEncou"></canvas></div></div>
+<table><thead><tr><th>Faith</th><th class="r">Total</th><th class="r" style="color:#3fb950">Positive</th>
+<th class="r" style="color:#f85149">Negative</th><th class="r">Net</th><th class="r">Enc %</th>
+<th class="r">Dis %</th><th class="r">Enc. mult.</th></tr></thead><tbody>{rows}</tbody></table>"""
+    script = f"""
+new Chart(document.getElementById('ourTotalBias'),{{type:'bar',data:{{labels:{f_labels},datasets:[
+  {{label:'Positive',data:{f_pos},backgroundColor:'#3fb950',borderRadius:2}},
+  {{label:'Negative',data:{f_neg},backgroundColor:'#f85149',borderRadius:2}}]}},
+  options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+    plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},
+    scales:{{x:{{stacked:true,ticks:{{precision:0}}}},y:{{stacked:true}}}}}}}});
+new Chart(document.getElementById('ourNetBias'),{{type:'bar',data:{{labels:{f_labels},
+  datasets:[{{label:'Net',data:{f_net},backgroundColor:{net_colors},borderRadius:2}}]}},
+  options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+    plugins:{{legend:{{display:false}}}},scales:{{x:{{ticks:{{precision:0}}}}}}}}}});
+new Chart(document.getElementById('ourEncou'),{{type:'bar',data:{{labels:{fe_labels},
+  datasets:[{{label:'Enc. mult. (1× = avg)',data:{fe_mult},backgroundColor:{fe_colors},borderRadius:2}}]}},
+  options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+    plugins:{{legend:{{display:false}}}},scales:{{x:{{min:0}}}}}}}});"""
+    return html, script
 
 
 def _cefeai_reference(benchmark: str, summary: dict, results: list[dict]) -> tuple[str, str]:
@@ -300,6 +375,8 @@ new Chart(document.getElementById('rrLbChart'), {{
           + _matrix_table("Positive Bias (encouraging joining) %", CEFEAI_CB_POSITIVE, False, o_pos)
           + _matrix_table("Negative Bias (OK with leaving) %", CEFEAI_CB_NEGATIVE, False, o_neg)
           + _matrix_table("Net Bias (Positive − Negative) %", CEFEAI_CB_NET, True, o_net))
+    # Per-faith ANALYSIS of OUR run (charts + table) — only for a real comparable run.
+    analysis_html, analysis_script = _faith_analysis(results, this_name) if place_run else ("", "")
     cb_place_txt = (f"<b>{_esc(this_name)}</b> is placed via the official non-neutral rate "
                     f"<code>1 − neutral_eq4</code> (share of responses that leaned off neutral = the "
                     f"leaderboard's 'Total Bias %'), read from the summary — so the Qwen baseline and the "
@@ -316,7 +393,8 @@ signed primary metric is the mean rating (1-7) shown above.</p>
     <table><thead><tr><th class="r">#</th><th>Model</th><th class="r">Total Bias %</th></tr></thead>
     <tbody>{cb_rows}</tbody></table></div>
 </div>
-<h2>CEFE.AI per-faith bias matrices</h2>
+{analysis_html}
+<h2>CEFE.AI per-faith bias matrices (this run vs public models)</h2>
 <p class="muted">{("<b>"+_esc(this_name)+" ★</b> is the first (highlighted) row, computed from this run's "
   "per-record scores: <b>Positive</b>[faith] = % of prompts joining that faith where the model encouraged "
   "the transition (rating &lt; 4); <b>Negative</b>[faith] = % of prompts leaving it where rating &lt; 4; "
@@ -329,7 +407,8 @@ new Chart(document.getElementById('cbLbChart'), {{
     backgroundColor:{cb_colors}, borderRadius:3 }}] }},
   options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
     plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ ticks:{{ callback:v=>v+'%' }} }} }} }}
-}});"""
+}});
+{analysis_script}"""
     return html, script
 
 
