@@ -70,8 +70,12 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 # See CLAUDE.md Lessons #14–#16 and IMPLEMENTATION_PLAN.md "Protocol v1 vs v2".
 ENABLE_THINKING = False   # Qwen3: disable <think> tokens (matches training format)
 TEMPERATURE = 0.0         # deterministic, reproducible
-MAX_TOKENS = 512          # sufficient for CEFEAI responses
+MAX_TOKENS = 1024         # headroom so answers are not truncated (truncation would
+                          # bias the judge, esp. against a verbose fine-tuned model).
+                          # Same value on baseline + fine-tuned → comparison stays fair.
 SEED_OPENROUTER = 42      # passed to OpenRouter; honoured on a best-effort basis
+JUDGE_MAX_TOKENS = 256    # judge verdict is short (RR ~1-sentence JSON / CB "Rating: N")
+JUDGE_ENABLE_THINKING = False  # deterministic + verdict can't be truncated by a think block
 
 SEMAPHORE_LIMIT = 10      # concurrent async requests (VALIDATION_REPORT.md R12)
 
@@ -166,9 +170,9 @@ async def _process_one(
             model=judge_model,
             messages=[{"role": "user", "content": judge_prompt}],
             temperature=0.0,
-            max_tokens=256,
+            max_tokens=JUDGE_MAX_TOKENS,
             seed=SEED_OPENROUTER,
-            enable_thinking=True,  # judge may use thinking; we strip tags
+            enable_thinking=JUDGE_ENABLE_THINKING,
             log_key=f"{prompt_id}_judge",
         )
         judge_raw = api.extract_text(judge_response)

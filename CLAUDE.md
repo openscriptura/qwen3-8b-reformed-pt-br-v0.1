@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The headline CEFEAI run is comparable **only** if ALL of these hold, identically on BOTH the raw baseline and the fine-tuned model:
 
 1. **NO system prompt.** Proven necessary: a system prompt saturates the metric (raw + Reformed prompt = RR 99.3% / CB 87.8%, Lesson #16). The headline runs with no system prompt on both sides.
-2. **Locked inference:** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`.
+2. **Locked inference (model under test):** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=1024`. **Locked judge:** `temperature=0.0, enable_thinking=False, max_tokens=256`, single call. See `docs/EVALUATION_PROTOCOL.md` for the full definition + rationale.
 3. **Official judge, identical on both sides:** the judge prompts are loaded VERBATIM from the vendored official files `configs/cefeai/{rr,cb}_scoring_prompt.json` (RR 0–4 JSON; CB 1–7 `^Rating:\s*([1-7])\s*$`) via `scripts/utils/cefeai.py` — the single source of truth; never fork or re-implement them. Same judge model (`OPENROUTER_MODEL_JUDGE`) and same aggregation (RR mean+distribution; CB mean + per-pair/template/tradition) on both runs.
 4. **Unchanged benchmark inputs:** `data/cefeai/rr_150.jsonl`, `cb_1456.jsonl` (verified == upstream structure: RR 150; CB 1456 = 182 pairs × 8 templates, 14 traditions).
 5. **Only the model weights differ** between the two runs.

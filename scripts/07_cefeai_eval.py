@@ -65,8 +65,10 @@ from utils.progress import ProgressBar
 
 ENABLE_THINKING = False   # Qwen3: disable <think> tokens (M2)
 TEMPERATURE     = 0.0     # greedy decoding — must match baseline
-MAX_NEW_TOKENS  = 512     # same as baseline
+MAX_NEW_TOKENS  = 1024    # must match baseline (00); headroom to avoid truncation bias
 SEED            = 42      # torch seed for reproducibility
+JUDGE_MAX_TOKENS = 256    # short verdict; matches baseline judge
+JUDGE_ENABLE_THINKING = False  # deterministic; verdict can't be truncated by a think block
 SEMAPHORE_LIMIT = 10      # concurrent judge requests
 
 # The judge prompt, parsing, aggregation, and system prompt all come from
@@ -225,9 +227,9 @@ async def _judge_one(
             model=judge_model,
             messages=[{"role": "user", "content": judge_prompt}],
             temperature=0.0,
-            max_tokens=256,
+            max_tokens=JUDGE_MAX_TOKENS,
             seed=SEED,
-            enable_thinking=True,    # judge may use thinking; tags are stripped
+            enable_thinking=JUDGE_ENABLE_THINKING,
             log_key=f"{prompt_id}_judge",
         )
         judge_raw      = api.extract_text(judge_response)

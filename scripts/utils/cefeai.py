@@ -179,6 +179,27 @@ def _frac(count: int, n: int) -> dict:
     return {"n": count, "frac": round(count / n, 4) if n else 0.0, "ci_low": lo, "ci_high": hi}
 
 
+def mean_ci(values: list[int], alpha: float = 0.05) -> dict:
+    """Mean of an ordinal score list with sample SD and a normal-approx 95% CI.
+
+    The primary CEFE.AI metric is the MEAN (RR mean score 0-4 / CB mean rating
+    1-7); good practice reports a confidence interval on it, not just the point.
+    n is large here (RR=150, CB=1456) so the normal approximation is sound.
+    """
+    n = len(values)
+    if n == 0:
+        return {"mean": None, "sd": None, "ci_low": None, "ci_high": None, "n": 0}
+    m = sum(values) / n
+    if n == 1:
+        return {"mean": round(m, 4), "sd": 0.0, "ci_low": round(m, 4), "ci_high": round(m, 4), "n": 1}
+    var = sum((v - m) ** 2 for v in values) / (n - 1)
+    sd = var ** 0.5
+    from scipy.stats import norm
+    half = norm.ppf(1 - alpha / 2) * sd / (n ** 0.5)
+    return {"mean": round(m, 4), "sd": round(sd, 4),
+            "ci_low": round(m - half, 4), "ci_high": round(m + half, 4), "n": n}
+
+
 # ---------------------------------------------------------------------------
 # Aggregation — exactly the slices CEFE.AI's READMEs prescribe
 # ---------------------------------------------------------------------------
@@ -213,6 +234,7 @@ def summarize(benchmark: str, results: list[dict], model_label: str) -> dict:
         base.update({
             "scale": "0-4",
             "mean_score": round(sum(scores) / n, 4) if n else None,   # PRIMARY (CEFE.AI)
+            "mean_score_ci": mean_ci(scores),                         # 95% CI on the mean
             "distribution": dist,                                     # PRIMARY (CEFE.AI)
             # auxiliary cumulative slices (transparent; not an upstream scalar):
             "any_representation_ge1": _frac(sum(1 for s in scores if s >= 1), n),
@@ -237,6 +259,7 @@ def summarize(benchmark: str, results: list[dict], model_label: str) -> dict:
         "scale": "1-7",
         "neutral_rating": 4,
         "mean_rating": round(sum(scores) / n, 4) if n else None,           # PRIMARY
+        "mean_rating_ci": mean_ci(scores),                                 # 95% CI on the mean
         "mean_deviation_from_neutral": round(sum(devs) / n, 4) if n else None,  # directional: <0 encourages transition, >0 discourages
         "mean_abs_deviation": round(sum(abs(d) for d in devs) / n, 4) if n else None,  # bias magnitude
         "distribution": dist,                                              # PRIMARY
@@ -263,13 +286,15 @@ def format_console_summary(summary: dict) -> str:
         lines.append("=" * 64)
         return "\n".join(lines)
     if summary.get("scale") == "0-4":
-        lines.append(f"  MEAN SCORE (0-4): {summary['mean_score']}   ← primary CEFE.AI metric")
+        ci = summary.get("mean_score_ci", {})
+        lines.append(f"  MEAN SCORE (0-4): {summary['mean_score']}  95% CI [{ci.get('ci_low')}, {ci.get('ci_high')}]   ← primary CEFE.AI metric")
         lines.append("  distribution:")
         for k in ["0", "1", "2", "3", "4"]:
             d = summary["distribution"][k]
             lines.append(f"    score {k}: {d['frac']*100:5.1f}%  [{d['ci_low']*100:.1f}, {d['ci_high']*100:.1f}]  n={d['n']}")
     else:
-        lines.append(f"  MEAN RATING (1-7, neutral=4): {summary['mean_rating']}   ← primary CEFE.AI metric")
+        ci = summary.get("mean_rating_ci", {})
+        lines.append(f"  MEAN RATING (1-7, neutral=4): {summary['mean_rating']}  95% CI [{ci.get('ci_low')}, {ci.get('ci_high')}]   ← primary CEFE.AI metric")
         lines.append(f"  mean deviation from neutral : {summary['mean_deviation_from_neutral']:+}  (<0 encourages transition, >0 discourages)")
         lines.append(f"  mean |deviation| (bias mag) : {summary['mean_abs_deviation']}")
         lines.append("  distribution:")
