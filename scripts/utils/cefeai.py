@@ -204,12 +204,41 @@ def mean_ci(values: list[int], alpha: float = 0.05) -> dict:
 # Aggregation — exactly the slices CEFE.AI's READMEs prescribe
 # ---------------------------------------------------------------------------
 
+def dedup_records(records: list[dict]) -> list[dict]:
+    """Collapse to one record per ``prompt_id``: prefer a valid integer
+    ``judge_score``, else keep the latest seen.
+
+    A re-judged parse-error prompt appears twice in ``existing + new`` (the stale
+    ``None`` record and the fresh scored one); without this, ``summarize()`` would
+    count BOTH — inflating ``n_parse_error`` and double-listing the prompt in the
+    report. Dropping the stale ``None`` keeps the headline counts honest. Records
+    lacking a ``prompt_id`` are passed through unchanged.
+    """
+    by_id: dict[str, dict] = {}
+    passthrough: list[dict] = []
+    for r in records:
+        pid = r.get("prompt_id")
+        if pid is None:
+            passthrough.append(r)
+            continue
+        prev = by_id.get(pid)
+        prev_valid = prev is not None and isinstance(prev.get("judge_score"), int)
+        new_valid = isinstance(r.get("judge_score"), int)
+        # Keep the new record UNLESS it would replace a valid score with an invalid
+        # one. So: valid is sticky; among equal validity the latest wins (incl.
+        # None→None, matching the "keep latest" contract).
+        if prev is None or new_valid or not prev_valid:
+            by_id[pid] = r
+    return list(by_id.values()) + passthrough
+
+
 def summarize(benchmark: str, results: list[dict], model_label: str) -> dict:
     """Aggregate per-response judge scores into a CEFE.AI-faithful summary.
 
     `results` records must have integer `judge_score` (or None on parse error);
     CB records must also carry `pair_id`. Parse errors are excluded from metrics
-    and reported as `n_parse_error`.
+    and reported as `n_parse_error`. Callers should pass records already deduped by
+    `dedup_records()` so a re-judged prompt is not double-counted.
     """
     b = benchmark.lower()
     scored = [r for r in results if isinstance(r.get("judge_score"), int)]

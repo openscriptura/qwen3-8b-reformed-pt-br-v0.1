@@ -35,6 +35,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from utils.api_client import OpenRouterClient
 from utils.cefeai import (
     build_judge_prompt,
+    dedup_records,
     format_console_summary,
     load_scoring_prompt,
     load_system_prompt,
@@ -45,6 +46,7 @@ from utils.cefeai import (
 from utils.cost_tracker import CostLimitExceeded, CostTracker
 from utils.logger import get_logger
 from utils.progress import ProgressBar
+from utils.report import generate_all_reports
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -74,7 +76,14 @@ MAX_TOKENS = 1024         # headroom so answers are not truncated (truncation wo
                           # bias the judge, esp. against a verbose fine-tuned model).
                           # Same value on baseline + fine-tuned → comparison stays fair.
 SEED_OPENROUTER = 42      # passed to OpenRouter; honoured on a best-effort basis
-JUDGE_MAX_TOKENS = 256    # judge verdict is short (RR ~1-sentence JSON / CB "Rating: N")
+JUDGE_MAX_TOKENS = 1024   # DeepSeek-v4 runs as a reasoning model on some OpenRouter
+                          # providers: reasoning tokens count against max_tokens, and at 256 the
+                          # judge exhausted the budget mid-reasoning → content=null parse errors.
+                          # 1024 is safe for the chosen `flash` judge (max reasoning observed 842
+                          # tok < 1024 → ~0% null); pro reasons up to 1178 tok, which is why §1
+                          # selects flash. Covers reasoning + the ~5-token verdict; cost ≈ same
+                          # (billed on tokens used, not the cap). MUST match 07_cefeai_eval.py
+                          # JUDGE_MAX_TOKENS for comparability — see docs/EVALUATION_PROTOCOL.md.
 JUDGE_ENABLE_THINKING = False  # deterministic + verdict can't be truncated by a think block
 
 SEMAPHORE_LIMIT = 10      # concurrent async requests (VALIDATION_REPORT.md R12)
@@ -97,18 +106,22 @@ def _get_env(key: str, default: str | None = None, required: bool = True) -> str
 
 
 def _load_processed_ids(results_file: Path) -> tuple[set[str], list[dict]]:
-    """Read existing JSONL and return (set of prompt_ids, list of records)."""
+    """Read existing JSONL and return (processed prompt_ids, deduped records).
+
+    A prompt counts as "processed" ONLY if it has a valid integer judge_score:
+    parse-error records (judge_score=None) are NOT treated as done, so a re-run
+    (e.g. after raising JUDGE_MAX_TOKENS) actually re-judges the failed prompts
+    instead of silently freezing them in (review finding: --resume no-op).
+
+    Records are deduped by prompt_id keeping the LATEST valid record, so a
+    re-judged prompt's stale None line is dropped from the aggregate rather than
+    double-counted alongside its new score.
+    """
     if not results_file.exists():
         return set(), []
-    ids: set[str] = set()
-    records: list[dict] = []
-    with results_file.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rec = json.loads(line)
-                ids.add(rec["prompt_id"])
-                records.append(rec)
+    raw = [json.loads(line) for line in results_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    records = dedup_records(raw)                 # canonical: prefer valid, else latest
+    ids = {r["prompt_id"] for r in records if isinstance(r.get("judge_score"), int)}
     return ids, records
 
 
@@ -177,7 +190,8 @@ async def _process_one(
         )
         judge_raw = api.extract_text(judge_response)
         judge_score, judge_rationale = parse_judge_score(benchmark, judge_raw)
-        judge_cost = api.estimate_cost_usd(judge_response, judge_model)
+        judge_model_used = api.actual_model(judge_response, judge_model)
+        judge_cost = api.estimate_cost_usd(judge_response, judge_model_used)
 
         total_cost = model_cost + judge_cost
         cost_tracker.add(total_cost)  # raises CostLimitExceeded if over limit
@@ -192,7 +206,7 @@ async def _process_one(
             "prompt": prompt_text,
             "model": model,
             "response": response_text,
-            "judge_model": judge_model,
+            "judge_model": judge_model_used,
             "judge_score": judge_score,          # int on official scale, or None (parse error)
             "judge_rationale": judge_rationale,
             "run_at": datetime.now(timezone.utc).isoformat(),
@@ -272,8 +286,19 @@ async def run_benchmark(
             if not dry_run:
                 sys.exit(1)
             log.warning("[DRY-RUN] (a real run would abort here until the stale file is removed)")
+        n_parse_pending = sum(1 for p in prompts if p["id"] not in processed_ids and
+                              any(r["prompt_id"] == p["id"] for r in existing_results))
         if processed_ids:
-            log.info("Resuming: %d prompts already done, skipping.", len(processed_ids))
+            log.info("Resuming: %d prompts already scored, skipping.", len(processed_ids))
+        if n_parse_pending:
+            log.warning("%d previously-parse-error prompts will be RE-JUDGED under the current "
+                        "judge settings (their stale records are dropped from the aggregate).", n_parse_pending)
+    elif not dry_run and results_file.exists():
+        # --no-resume = start fresh: truncate the file so re-judged prompts are not
+        # appended next to their stale records (which would double-count in the
+        # summary while paired_comparison keeps only one — review finding).
+        log.warning("--no-resume: discarding existing %s and starting from scratch.", results_file.name)
+        results_file.unlink()
 
     remaining = [p for p in prompts if p["id"] not in processed_ids]
     log.info("%d prompts remaining to process.", len(remaining))
@@ -344,10 +369,28 @@ async def run_benchmark(
     progress.done()
 
     # --- Summary (CEFE.AI-faithful aggregation from utils.cefeai) ---
-    all_results = existing_results + new_results
+    # Dedup so a re-judged parse-error prompt (stale None + fresh score) is counted
+    # ONCE, then rewrite the JSONL canonical so the on-disk file stays one-per-prompt.
+    union_results = existing_results + new_results
+    all_results = dedup_records(union_results)
+    # Atomic rewrite: write a sibling temp then os.replace, so a crash mid-write can
+    # never truncate/destroy the durable checkpoint (open("w") would).
+    tmp_file = results_file.with_suffix(results_file.suffix + ".tmp")
+    with tmp_file.open("w", encoding="utf-8") as fh:
+        for r in all_results:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_file, results_file)
     summary = summarize(benchmark, all_results, model)
     summary["judge_model"]        = judge_model
+    # True spend (pre-dedup): a re-judged parse-error prompt's first (failed) call
+    # also cost money, so account for both calls — not just the kept record.
+    summary["total_cost_usd"]     = round(sum(r.get("cost_usd", 0.0) for r in union_results), 6)
+    summary["judge_models_served"] = sorted({r.get("judge_model") for r in all_results if r.get("judge_model")})
+    summary["judge_max_tokens"]   = JUDGE_MAX_TOKENS   # recorded so 07 can verify the judge config matches (comparability)
     summary["system_prompt_mode"] = prompt_mode
+    summary["run_label"]          = "baseline"          # labels this run on the leaderboard chart
     summary["enable_thinking"]    = ENABLE_THINKING
     summary["temperature"]        = TEMPERATURE
     summary["seed"]               = SEED_OPENROUTER
@@ -358,6 +401,18 @@ async def run_benchmark(
 
     log.info("📄 JSONL    : %s  (%d records)", results_file, len(all_results))
     log.info("📊 Summary  : %s", summary_file)
+
+    # Display-only reports (md/json/html) from the OFFICIAL summary. Best-effort:
+    # a report failure must never lose the already-written JSONL/summary.
+    try:
+        paths = generate_all_reports(
+            summary, all_results, benchmark, RESULTS_DIR,
+            file_stem=f"baseline_{model_slug}_{prompt_mode}",
+        )
+        log.info("📰 HTML     : %s", paths["html"])
+    except Exception as exc:                       # noqa: BLE001 — report is non-critical
+        log.warning("⚠  Report generation failed (metrics are safe in the summary): %s", exc)
+
     if summary["n_parse_error"]:
         log.warning("⚠  %d judge replies failed to parse (excluded from metrics).",
                     summary["n_parse_error"])
@@ -472,7 +527,7 @@ def main() -> None:
     print("  OpenScriptura — CEFEAI Baseline")
     print("=" * W)
     print(f"  Model       : {model}")
-    print(f"  Judge       : {judge}")
+    print(f"  Judge       : {judge}  (single judge — no cross-model fallback, comparability lock)")
     print(f"  Benchmarks  : {', '.join(b.upper() for b in benchmarks)}")
     print(f"  System prompt: {'yes (v2 deployment-behavior — NOT leaderboard-comparable)' if system_prompt else 'no (v1 — headline, CEFEAI-comparable)'}")
     print(f"  Cost limit  : ${cost_limit:.2f}")
