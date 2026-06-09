@@ -82,10 +82,12 @@ SEMAPHORE_LIMIT = 10      # concurrent judge requests
 # utils.cefeai, which loads the OFFICIAL CEFE.AI scoring_prompt.json verbatim —
 # so this eval and the Phase 0 baseline score identically, and as CEFE.AI does.
 
-BENCHMARK_FILES: dict[str, Path] = {
-    "rr": PROJECT_ROOT / "data" / "cefeai" / "rr_150.jsonl",
-    "cb": PROJECT_ROOT / "data" / "cefeai" / "cb_1456.jsonl",
-}
+BENCHMARK_BASENAME: dict[str, str] = {"rr": "rr_150", "cb": "cb_1456"}
+LANG_SUFFIX: dict[str, str] = {"en": "", "ptbr": "_ptbr"}   # en=headline; ptbr=secondary track
+
+
+def _benchmark_file(benchmark: str, lang: str) -> Path:
+    return PROJECT_ROOT / "data" / "cefeai" / f"{BENCHMARK_BASENAME[benchmark]}{LANG_SUFFIX[lang]}.jsonl"
 RESULTS_DIR = PROJECT_ROOT / "results"
 
 # ---------------------------------------------------------------------------
@@ -319,10 +321,13 @@ async def run_benchmark(
     api_key: str,
     cost_tracker: CostTracker,
     log,
+    lang: str = "en",
 ) -> None:
-    benchmark_file = BENCHMARK_FILES[benchmark]
+    benchmark_file = _benchmark_file(benchmark, lang)
     if not benchmark_file.exists():
         log.error("Benchmark file not found: %s", benchmark_file)
+        if lang != "en":
+            log.error("Run scripts/translate_benchmark.py first to build the pt-BR benchmark.")
         log.error("Download from https://cefe.ai and place at the path above.")
         # Dry-run must stay offline-safe: validate everything else and skip this
         # benchmark instead of hard-exiting (matches 00_cefeai_baseline.py).
@@ -346,9 +351,11 @@ async def run_benchmark(
     # both --resume correctness and comparability bookkeeping.
     model_slug  = model_path.name.replace("-", "_").replace("/", "_")
     prompt_mode = "sysprompt" if system_prompt else "noprompt"
+    lang_tag    = "" if lang == "en" else f"{lang}_"
+    file_stem   = f"eval_{model_slug}_{lang_tag}{prompt_mode}"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    results_file = RESULTS_DIR / f"eval_{model_slug}_{prompt_mode}_{benchmark.upper()}.jsonl"
-    summary_file = RESULTS_DIR / f"eval_{model_slug}_{prompt_mode}_{benchmark.upper()}_summary.json"
+    results_file = RESULTS_DIR / f"{file_stem}_{benchmark.upper()}.jsonl"
+    summary_file = RESULTS_DIR / f"{file_stem}_{benchmark.upper()}_summary.json"
     log_raw_dir  = PROJECT_ROOT / "logs" / "raw" / f"eval_{benchmark}_{datetime.now().strftime('%Y%m%d')}"
 
     # Resume
@@ -455,7 +462,8 @@ async def run_benchmark(
     summary["judge_models_served"] = sorted({r.get("judge_model") for r in all_results if r.get("judge_model")})
     summary["judge_max_tokens"]   = JUDGE_MAX_TOKENS   # for the cross-run config check below (comparability)
     summary["system_prompt_mode"] = prompt_mode
-    summary["run_label"]          = "fine-tuned"        # labels this run on the leaderboard chart
+    summary["lang"]               = lang                # "en" = comparable; "ptbr" = secondary track
+    summary["run_label"]          = "fine-tuned" if lang == "en" else "fine-tuned (pt-BR)"
     summary["enable_thinking"]    = ENABLE_THINKING
     summary["temperature"]        = TEMPERATURE
     summary["seed"]               = SEED
@@ -471,7 +479,7 @@ async def run_benchmark(
     try:
         paths = generate_all_reports(
             summary, all_results, benchmark, RESULTS_DIR,
-            file_stem=f"eval_{model_slug}_{prompt_mode}",
+            file_stem=file_stem,
         )
         log.info("📰 HTML    : %s", paths["html"])
     except Exception as exc:                       # noqa: BLE001 — report is non-critical
@@ -480,11 +488,13 @@ async def run_benchmark(
     if summary["n_parse_error"]:
         log.warning("⚠  %d judge replies failed to parse (excluded from metrics).", summary["n_parse_error"])
 
-    # Compare against the baseline that MATCHES this run's prompt mode (headline =
-    # noprompt). Falls back to the legacy untagged v1 baseline with a caveat.
+    # Compare against the baseline that MATCHES this run's language + prompt mode
+    # (headline = en/noprompt). The legacy untagged fallback applies ONLY to the
+    # English track — a pt-BR eval must never be paired against the English baseline.
     base_slug = "qwen_qwen3_8b"   # OPENROUTER_MODEL_BASELINE = qwen/qwen3-8b
-    tagged_baseline = RESULTS_DIR / f"baseline_{base_slug}_{prompt_mode}_{benchmark.upper()}_summary.json"
-    legacy_baseline = RESULTS_DIR / f"baseline_{base_slug}_{benchmark.upper()}_summary.json"
+    tagged_baseline = RESULTS_DIR / f"baseline_{base_slug}_{lang_tag}{prompt_mode}_{benchmark.upper()}_summary.json"
+    legacy_baseline = (RESULTS_DIR / f"baseline_{base_slug}_{benchmark.upper()}_summary.json"
+                       if lang == "en" else tagged_baseline)
     matched       = tagged_baseline.exists()
     baseline_file = tagged_baseline if matched else legacy_baseline
     if baseline_file.exists():
@@ -570,6 +580,10 @@ Examples:
                         help="Path to merged model or PEFT adapter directory")
     parser.add_argument("--benchmark", choices=["rr", "cb", "both"], default="both",
                         help="CEFEAI benchmark to run (default: both)")
+    parser.add_argument("--lang", choices=["en", "ptbr"], default="en",
+                        help="en (default) = English CEFE.AI, leaderboard-comparable HEADLINE; "
+                             "ptbr = translated SECONDARY track (NOT leaderboard-comparable). "
+                             "Must match the baseline's language for the paired comparison.")
     parser.add_argument("--system-prompt", dest="use_system_prompt", action="store_true", default=False,
                         help="v2 deployment-behavior eval (WITH the Reformed system prompt). "
                              "NOT CEFEAI-comparable (the prompt saturates the metric). "
@@ -656,6 +670,7 @@ Examples:
                 api_key=api_key,
                 cost_tracker=cost_tracker,
                 log=log,
+                lang=args.lang,
             )
         )
 

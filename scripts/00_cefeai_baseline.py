@@ -52,10 +52,14 @@ from utils.report import generate_all_reports
 # Constants
 # ---------------------------------------------------------------------------
 
-BENCHMARK_FILES: dict[str, Path] = {
-    "rr": PROJECT_ROOT / "data" / "cefeai" / "rr_150.jsonl",
-    "cb": PROJECT_ROOT / "data" / "cefeai" / "cb_1456.jsonl",
-}
+BENCHMARK_BASENAME: dict[str, str] = {"rr": "rr_150", "cb": "cb_1456"}
+# Language tracks: "en" = the official English CEFE.AI (HEADLINE, leaderboard-comparable);
+# "ptbr" = the translated SECONDARY track (deployment-realistic, NOT leaderboard-comparable).
+LANG_SUFFIX: dict[str, str] = {"en": "", "ptbr": "_ptbr"}
+
+
+def _benchmark_file(benchmark: str, lang: str) -> Path:
+    return PROJECT_ROOT / "data" / "cefeai" / f"{BENCHMARK_BASENAME[benchmark]}{LANG_SUFFIX[lang]}.jsonl"
 
 RESULTS_DIR = PROJECT_ROOT / "results"
 LOGS_DIR = PROJECT_ROOT / "logs"
@@ -236,13 +240,16 @@ async def run_benchmark(
     cost_limit: float,
     log,
     system_prompt: str | None = None,
+    lang: str = "en",
 ) -> bool:
     """Run one benchmark (rr or cb).  Returns True on success / clean dry-run."""
-    benchmark_file = BENCHMARK_FILES[benchmark]
+    benchmark_file = _benchmark_file(benchmark, lang)
 
     # --- Check benchmark file ---
     if not benchmark_file.exists():
         log.error("Benchmark file not found: %s", benchmark_file)
+        if lang != "en":
+            log.error("Run scripts/translate_benchmark.py first to build the pt-BR benchmark.")
         log.error("Expected: %s", benchmark_file.resolve())
         log.error(
             "Download the CEFEAI %s benchmark and place it at the path above.",
@@ -269,9 +276,11 @@ async def run_benchmark(
     # baseline that matches its own prompt mode.
     model_slug  = model.replace("/", "_").replace("-", "_")
     prompt_mode = "sysprompt" if system_prompt else "noprompt"
+    lang_tag    = "" if lang == "en" else f"{lang}_"   # "" keeps the English files unchanged
+    file_stem   = f"baseline_{model_slug}_{lang_tag}{prompt_mode}"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    results_file = RESULTS_DIR / f"baseline_{model_slug}_{prompt_mode}_{benchmark.upper()}.jsonl"
-    summary_file = RESULTS_DIR / f"baseline_{model_slug}_{prompt_mode}_{benchmark.upper()}_summary.json"
+    results_file = RESULTS_DIR / f"{file_stem}_{benchmark.upper()}.jsonl"
+    summary_file = RESULTS_DIR / f"{file_stem}_{benchmark.upper()}_summary.json"
 
     log_raw_dir = LOGS_DIR / "raw" / f"{benchmark}_{datetime.now().strftime('%Y%m%d')}"
 
@@ -390,7 +399,8 @@ async def run_benchmark(
     summary["judge_models_served"] = sorted({r.get("judge_model") for r in all_results if r.get("judge_model")})
     summary["judge_max_tokens"]   = JUDGE_MAX_TOKENS   # recorded so 07 can verify the judge config matches (comparability)
     summary["system_prompt_mode"] = prompt_mode
-    summary["run_label"]          = "baseline"          # labels this run on the leaderboard chart
+    summary["lang"]               = lang                # "en" = comparable; "ptbr" = secondary track
+    summary["run_label"]          = "baseline" if lang == "en" else "baseline (pt-BR)"
     summary["enable_thinking"]    = ENABLE_THINKING
     summary["temperature"]        = TEMPERATURE
     summary["seed"]               = SEED_OPENROUTER
@@ -406,8 +416,7 @@ async def run_benchmark(
     # a report failure must never lose the already-written JSONL/summary.
     try:
         paths = generate_all_reports(
-            summary, all_results, benchmark, RESULTS_DIR,
-            file_stem=f"baseline_{model_slug}_{prompt_mode}",
+            summary, all_results, benchmark, RESULTS_DIR, file_stem=file_stem,
         )
         log.info("📰 HTML     : %s", paths["html"])
     except Exception as exc:                       # noqa: BLE001 — report is non-critical
@@ -453,6 +462,14 @@ Examples:
         "--model",
         default=None,
         help="Override OPENROUTER_MODEL_BASELINE from .env.",
+    )
+    parser.add_argument(
+        "--lang",
+        choices=["en", "ptbr"],
+        default="en",
+        help="en (default) = official English CEFE.AI, leaderboard-comparable HEADLINE; "
+             "ptbr = translated SECONDARY track (run translate_benchmark.py first) — "
+             "deployment-realistic but NOT leaderboard-comparable. Outputs tagged with the lang.",
     )
     parser.add_argument(
         "--dry-run",
@@ -529,10 +546,14 @@ def main() -> None:
     print(f"  Model       : {model}")
     print(f"  Judge       : {judge}  (single judge — no cross-model fallback, comparability lock)")
     print(f"  Benchmarks  : {', '.join(b.upper() for b in benchmarks)}")
+    print(f"  Language    : {'en — official CEFE.AI, leaderboard-comparable HEADLINE' if args.lang == 'en' else 'ptbr — SECONDARY track, NOT leaderboard-comparable'}")
     print(f"  System prompt: {'yes (v2 deployment-behavior — NOT leaderboard-comparable)' if system_prompt else 'no (v1 — headline, CEFEAI-comparable)'}")
     print(f"  Cost limit  : ${cost_limit:.2f}")
     if args.dry_run:
         print("  ⚠️  DRY-RUN — no API calls will be made")
+    if args.lang != "en":
+        print("  ⚠️  pt-BR track: translated benchmark — internal delta is rigorous, but the")
+        print("      absolute numbers are NOT comparable to the English CEFE.AI leaderboard.")
     if system_prompt:
         print("  ⚠️  v2 mode: the system prompt alone saturates the metric — use this")
         print("      only as a deployment-behavior datapoint, not vs the CEFEAI leaderboard.")
@@ -553,6 +574,7 @@ def main() -> None:
                 cost_limit=cost_limit,
                 log=log,
                 system_prompt=system_prompt,
+                lang=args.lang,
             )
         )
 

@@ -168,6 +168,24 @@ def test_per_faith_analysis_omitted_when_degenerate(tmp_results_dir):
     assert "ourTotalBias" not in html
 
 
+def test_ptbr_track_not_placed_on_english_leaderboard(tmp_results_dir):
+    # pt-BR (translated) is a different benchmark: our run must NOT be placed on the
+    # public English leaderboard/matrices (no ★), but our OWN analysis IS shown, with
+    # a non-comparability banner; the public data still renders as reference.
+    s, recs = _cb_summary([2, 4, 6, 4, 2], run_label="fine-tuned (pt-BR)", lang="ptbr")
+    html = generate_all_reports(s, recs, "cb", tmp_results_dir, file_stem="t")["html"].read_text(encoding="utf-8")
+    assert "pt-BR track" in html                              # non-comparability banner
+    assert "Qwen3-8B (fine-tuned (pt-BR)) ★" not in html      # NOT placed on the public leaderboard/matrices
+    assert "Per-faith bias analysis — Qwen3-8B (fine-tuned (pt-BR))" in html  # own analysis shown
+    assert "DeepSeek v4 Pro" in html                          # public data as static reference
+
+
+def test_english_track_is_placed_on_leaderboard(tmp_results_dir):
+    s, recs = _cb_summary([2, 4, 6, 4, 2], run_label="fine-tuned", lang="en")
+    html = generate_all_reports(s, recs, "cb", tmp_results_dir, file_stem="t")["html"].read_text(encoding="utf-8")
+    assert "Qwen3-8B (fine-tuned) ★" in html                  # placed (English headline)
+
+
 def test_our_faith_metrics_structure():
     from utils.report import _our_faith_metrics
     recs = [{"judge_score": 1, "religion_from": _FAITHS[0], "religion_to": _FAITHS[1]}]

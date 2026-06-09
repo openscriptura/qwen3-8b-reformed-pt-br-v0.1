@@ -270,16 +270,27 @@ def _cefeai_reference(benchmark: str, summary: dict, results: list[dict]) -> tup
     this_name = f"Qwen3-8B ({run_label})"
     n_scored = summary.get("n_scored", 0) or 0
     is_noprompt = (summary.get("system_prompt_mode") or "noprompt") == "noprompt"
-    place_run = n_scored > 0 and is_noprompt
+    lang = summary.get("lang", "en")
+    # own_run: show OUR per-faith analysis (own data — valid in any language).
+    # place_run: place OUR run onto the PUBLIC (English) leaderboard/matrices — only
+    # valid for the English, no-prompt, real run (the pt-BR track is a translated,
+    # different benchmark, NOT comparable to the public English leaderboard).
+    own_run = n_scored > 0 and is_noprompt
+    place_run = own_run and lang == "en"
     if place_run:
         gate_note = ""
     elif n_scored == 0:
         gate_note = ('<p class="muted">⚠ This run has no valid judge scores (all parse errors); '
                      'it is omitted from the public leaderboard.</p>')
-    else:
+    elif not is_noprompt:
         gate_note = ('<p class="muted">⚠ This is a v2 (system-prompt) run — the prompt saturates the '
                      'metric and is NOT comparable to the prompt-free public leaderboard, so this run '
                      'is omitted from it (deployment-behavior datapoint only).</p>')
+    else:   # pt-BR (translated) track
+        gate_note = ('<p class="muted">⚠ pt-BR track (translated benchmark) — a DIFFERENT benchmark from '
+                     'the English CEFE.AI the public leaderboard uses, so this run is NOT placed on it. '
+                     'Our own per-faith analysis below is valid; the internal baseline→fine-tuned delta '
+                     '(both sides pt-BR) is rigorous, but absolute numbers are not leaderboard-comparable.</p>')
 
     if _is_rr(benchmark):
         our = (summary.get("any_representation_ge1") or {}).get("frac")
@@ -375,8 +386,10 @@ new Chart(document.getElementById('rrLbChart'), {{
           + _matrix_table("Positive Bias (encouraging joining) %", CEFEAI_CB_POSITIVE, False, o_pos)
           + _matrix_table("Negative Bias (OK with leaving) %", CEFEAI_CB_NEGATIVE, False, o_neg)
           + _matrix_table("Net Bias (Positive − Negative) %", CEFEAI_CB_NET, True, o_net))
-    # Per-faith ANALYSIS of OUR run (charts + table) — only for a real comparable run.
-    analysis_html, analysis_script = _faith_analysis(results, this_name) if place_run else ("", "")
+    # Per-faith ANALYSIS of OUR run (charts + table) — shown whenever we have our
+    # own data (valid in any language); only the PUBLIC-leaderboard placement above
+    # is gated on `place_run` (English only).
+    analysis_html, analysis_script = _faith_analysis(results, this_name) if own_run else ("", "")
     cb_place_txt = (f"<b>{_esc(this_name)}</b> is placed via the official non-neutral rate "
                     f"<code>1 − neutral_eq4</code> (share of responses that leaned off neutral = the "
                     f"leaderboard's 'Total Bias %'), read from the summary — so the Qwen baseline and the "
