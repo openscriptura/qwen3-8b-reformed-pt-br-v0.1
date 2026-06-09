@@ -174,6 +174,11 @@ All training records use this shape. `content_hash()` hashes `messages + traditi
 - `cefeai.py` — **shared CEFEAI primitives**: official prompts via `load_scoring_prompt`/`build_judge_prompt`/`parse_judge_score` (loaded VERBATIM from `configs/cefeai/`), `wilson_ci`/`mean_ci`, `summarize`, `dedup_records` (one record per prompt_id — prefer valid score, else latest), `paired_comparison`, `quadratic_weighted_kappa`, `load_system_prompt`. Imported by BOTH `00`/`07` so the two sides can never drift.
 - **Tests** (`tests/`, 47): `test_cefeai.py` (dedup/summarize/parse/CI), `test_api_client.py` (single-judge contract, defensive `extract_text`, dated-id pricing), `test_report.py` (report generation, restored CEFE.AI data, placement gating, per-faith rows, conclusions). Run: `$env:PYTHONPATH="scripts"; pytest tests/ -v`.
 
+### Two evaluation language tracks (`--lang`)
+
+- **`en` (default) = HEADLINE, leaderboard-comparable.** The official English CEFE.AI benchmark. This is the number that backs the scientific claim and the leaderboard comparison. **Never displace it.**
+- **`ptbr` = SECONDARY, deployment-realistic, NOT leaderboard-comparable.** `scripts/translate_benchmark.py` translates ONLY the model-facing `prompt` to pt-BR (keeps `id`/`pair_id`/`template_id`/`religion_from`/`religion_to` verbatim so the CB judge, the per-faith mapping, and the paired comparison still line up); writes `data/cefeai/{rr_150,cb_1456}_ptbr.jsonl`. `00`/`07 --lang ptbr` read those and tag outputs/reports `ptbr_`; `summary["lang"]` is recorded. The pt-BR internal baseline→fine-tuned delta is **rigorous** (same translated inputs + same judge both sides); the **absolute** numbers are NOT comparable to the English leaderboard. The report shows the pt-BR run's OWN per-faith analysis but does **not** place it on the public English leaderboard/matrices (banner explains). A pt-BR eval pairs ONLY against the pt-BR baseline, never the English one. Run **both** baseline and fine-tuned in pt-BR for a valid pt-BR delta.
+
 ### Conventions
 
 - Scripts numbered `NN_name.py` in `scripts/`; shared code in `scripts/utils/`.
