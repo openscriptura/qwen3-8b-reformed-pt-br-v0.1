@@ -1,5 +1,7 @@
 # OpenScriptura — Implementation Plan
-> Consenso dos 539 PhDs. Última revisão: 2026-06-08. Phase 2 complete; Phase 3/4 scripts written; **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
+> Consenso dos 539 PhDs. Última revisão: 2026-06-09. **Phase 0 baseline DONE (official flash judge)**; Phase 1/2 complete; Phase 3/4 scripts written; **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
+>
+> **✅ Phase 0 baseline (2026-06-09, official judge, no-prompt):** RR mean **0.1467/4** (any-rep **12.7%**); CB mean **3.6944/7** (deviation **−0.31**, 79.8% neutral); judge `deepseek/deepseek-v4-flash` (single, no fallback, `max_tokens=1024`); **0 parse-errors** both; cost ≈ $1.13. This is the comparable reference for Phase 4.
 
 ---
 
@@ -27,7 +29,10 @@ pair/template/tradition). The 1,606 questions were verified **identical** to ups
 [`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md). So the **internal
 baseline→fine-tuned delta is rigorous**; **absolute** numbers are *protocol-adherent
 but judge-dependent* (not provably identical to their leaderboard until they reply).
-**The baseline must be re-run with the official judge before citing any CEFEAI number.**
+**✅ Done (2026-06-09):** the baseline was re-run with the official judge
+(`deepseek-v4-flash`, no-prompt) — RR mean 0.1467/4, CB mean 3.6944/7, 0 parse-errors.
+The judge model decision (single flash, no cross-model fallback) is recorded in
+`CLAUDE.md` Lesson #18 and `docs/EVALUATION_PROTOCOL.md` §1.
 
 ---
 
