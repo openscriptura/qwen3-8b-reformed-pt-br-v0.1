@@ -51,7 +51,12 @@ DATA_DIR = PROJECT_ROOT / "data" / "cefeai"
 
 TEMPERATURE = 0.0       # deterministic translation
 SEED = 42
-MAX_TOKENS = 1024
+# Reasoning headroom: deepseek-v4-pro is a reasoning model — on long/sensitive
+# prompts it spends the whole budget "thinking" and returns content="" with
+# finish_reason="length" (same failure class as Lesson #18). 4096 leaves room for
+# the reasoning + the short translation; cost is on tokens used, not the cap.
+# Empty results are auto-retried on --resume (done_ids counts non-empty only).
+MAX_TOKENS = 4096
 SEMAPHORE_LIMIT = 10
 
 # The translation system instruction. We translate ONLY the text; the model must
