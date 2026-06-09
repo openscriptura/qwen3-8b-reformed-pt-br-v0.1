@@ -6,9 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **OpenScriptura** is an applied research pipeline to fine-tune open LLMs (starting with Qwen3-8B) with Protestant theological corpus. The first release target is `qwen3-8b-reformed-pt-br-v0.1` (Reformed theology, Brazilian Portuguese), evaluated on the CEFEAI benchmark.
 
-**Status:** Phase 0 ✅ (headline baseline RR 4.7%, CB 19.6% — **v1, no system prompt**) · Phase 1 ✅ (2,968 records: 839 C + 2,129 B) · Phase 2 ✅ (4 configs run; **winner exp_c** r=64 lr=2e-4, eval_all_loss 0.6527) · Phase 3 scripts ✅ written, run 🔲 · Phase 4 scripts ✅ written, run 🔲
+**Status:** Phase 0 🔲 (baseline must be **re-run with the official CEFE.AI judge** — see ⚠️ below) · Phase 1 ✅ (2,968 records: 839 C + 2,129 B) · Phase 2 ✅ (4 configs run; **winner exp_c** r=64 lr=2e-4, eval_all_loss 0.6527) · Phase 3 scripts ✅ written, run 🔲 · Phase 4 scripts ✅ written, run 🔲
 
-> **Evaluation protocol — headline is v1 (NO system prompt).** We briefly tried "protocol v2" (put the Reformed system prompt on both sides). The v2 run proved it wrong empirically: the prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%**. That (a) isn't comparable to the prompt-free CEFEAI leaderboard and (b) leaves no headroom to show what fine-tuning added. So the headline/comparable protocol is **v1: no system prompt, both sides** (`scripts/00` and `07` default to this; `--system-prompt` opts into v2). v2 is retained only as an opt-in **deployment-behavior** datapoint, never a leaderboard number. See IMPLEMENTATION_PLAN.md → "Evaluation protocol — v1 vs v2" and Lessons #14–#16.
+> **⚠️ Old CEFEAI numbers are INVALID.** Every previously-quoted score — RR 4.7% / CB 19.6% (v1) and RR 99.3% / CB 87.8% (v2) — was produced by a **home-grown judge rubric (0–3)** that does **not** match CEFE.AI. We now load the **official** `scoring_prompt.json` (RR 0–4, CB 1–7) from `configs/cefeai/`. Those old numbers are kept only as historical artifacts; the baseline must be **re-run with the official judge** before any comparison.
+>
+> **Adherence stance:** we are **100% aligned with everything CEFE.AI documents** (judge prompts, scales, parsing, the 1,606 questions — verified identical, aggregation). The **only** gap is what CEFE.AI does **not** publish — the **judge model** and **inference settings** — which we define by good science in `docs/EVALUATION_PROTOCOL.md`. Consequence: the **internal baseline→fine-tuned delta is rigorous**; **absolute** numbers are *protocol-adherent but judge-dependent* (not provably identical to their leaderboard until they share the judge).
+>
+> **Headline protocol = v1 (NO system prompt), both sides.** A system prompt saturates the metric and isn't leaderboard-comparable; `00`/`07` default to no prompt, `--system-prompt` is an opt-in deployment datapoint. See IMPLEMENTATION_PLAN.md → "Evaluation protocol" and Lessons #14–#17.
 
 ## ⛔ HARD RULE — CEFEAI comparability is NON-NEGOTIABLE
 
@@ -28,7 +32,7 @@ The headline CEFEAI run is comparable **only** if ALL of these hold, identically
 
 **If you ever think an improvement requires changing one of these: STOP.** Do not do it on the headline path. Surface it to the user. If they approve a new protocol, you MUST (a) keep producing the comparable number too, (b) re-run **both** sides under the new protocol, and (c) label the new number loudly as NOT leaderboard-comparable. (This is exactly what happened to the v2 system-prompt experiment — it was run, it broke comparability, and it was demoted to an opt-in footnote, never the headline.)
 
-**Protected asset:** the v1 baseline (RR 4.7% / CB 19.6%, no prompt) is the reference. Never overwrite or delete it — archived at `results/v1_baseline_archive/`.
+**Reference baseline:** will be the **official-judge, no-prompt** run of raw Qwen3-8B (pending). The old `results/v1_baseline_archive/` (RR 4.7% / CB 19.6%) was scored with the home-grown 0–3 rubric — keep it as a historical artifact, but it is **NOT** the comparable reference and must not be cited as a CEFE.AI number.
 
 ## Commands
 
@@ -43,7 +47,7 @@ pip install transformers==4.51.0 trl==0.12.0 peft==0.13.0 bitsandbytes \
 
 # Phase 0: Baseline ✅ — HEADLINE = v1 (no system prompt, CEFEAI-comparable)
 python scripts/00_cefeai_baseline.py --benchmark both --dry-run
-python scripts/00_cefeai_baseline.py --benchmark both          # v1 headline → RR 4.7% / CB 19.6%
+python scripts/00_cefeai_baseline.py --benchmark both          # v1 headline, OFFICIAL judge → RR mean(0-4) / CB mean(1-7)
 #   → results/baseline_qwen_qwen3_8b_noprompt_{RR,CB}_summary.json (legacy untagged files also = v1)
 
 # (Optional) v2 deployment-behavior datapoint — NOT comparable (prompt saturates: RR 99.3% / CB 87.8%)
@@ -167,7 +171,7 @@ All training records use this shape. `content_hash()` hashes `messages + traditi
 - `sys.stdout.reconfigure(encoding="utf-8")` at top of every entry-point script (Windows/PowerShell UTF-8).
 - Paths resolved from `PROJECT_ROOT = Path(__file__).resolve().parent.parent`.
 - Every API-spending script: `OpenRouterClient` + `CostTracker` + `--dry-run` + `--resume` checkpoint.
-- **CEFEAI comparability — headline = v1 (NO system prompt):** `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`, and **no system prompt**, applied to BOTH the Phase 0 baseline (`00_cefeai_baseline.py`) and the Phase 4 eval (`07_cefeai_eval.py`) — they default to this. The only difference between the two runs is the model weights, and the numbers stay comparable to the prompt-free CEFEAI leaderboard. `--system-prompt` opts into the **v2 deployment-behavior** mode (canonical Reformed prompt from `configs/system_prompt.txt`); it is NOT a leaderboard number — empirically the prompt alone saturated the raw model (RR 99.3% / CB 87.8%). Output files are tagged `noprompt`/`sysprompt`; `07` compares against the baseline matching its own mode (falling back to the legacy untagged v1 files). Shared judge prompts / Wilson CI / system-prompt loader live in `scripts/utils/cefeai.py`. Training-side settings (LR, LoRA rank, batch size) are orthogonal.
+- **CEFEAI comparability — headline = v1 (NO system prompt), OFFICIAL judge:** model-under-test `temperature=0.0, seed=42, enable_thinking=False, max_tokens=1024`; judge `temperature=0.0, enable_thinking=False, max_tokens=256` — applied to BOTH the Phase 0 baseline (`00_cefeai_baseline.py`) and the Phase 4 eval (`07_cefeai_eval.py`). Judge prompts/scales/parsing are loaded VERBATIM from the official `configs/cefeai/{rr,cb}_scoring_prompt.json` (RR 0–4, CB 1–7) via `scripts/utils/cefeai.py` — never hardcoded. The only difference between the two runs is the model weights. `--system-prompt` opts into the **v2 deployment-behavior** mode (NOT a leaderboard number). Output files tagged `noprompt`/`sysprompt`. Judge model + inference settings are unpublished by CEFE.AI → defined in `docs/EVALUATION_PROTOCOL.md` (absolute numbers judge-dependent; internal delta rigorous). Training-side settings (LR, LoRA rank, batch size) are orthogonal.
 
 ### GPU Strategy
 
@@ -305,6 +309,12 @@ Verify the GPU is clear with `nvidia-smi` (0 MiB, "No running processes") before
 2. **Erases the fine-tuning signal.** If the *raw* model + prompt already scores ~99% / ~88%, the *fine-tuned* model + prompt has no headroom — you can't measure what fine-tuning bought. The whole "improved by N points" claim becomes unmeasurable.
 **Decision:** the **headline / CEFEAI-comparable protocol is v1 — NO system prompt, on BOTH sides** (the original Lesson #14 conclusion, now confirmed by data). `00` and `07` **default to no prompt**; `--system-prompt` opts into v2, which is kept ONLY as a labeled deployment-behavior datapoint (and for CB, high bias is by-design intent, not a regression).
 **Console gotcha:** the RR leaderboard line printed "this run = 4.7%" (a stale static row) while the actual v2 RR summary was **99.3%** — always trust `results/..._summary.json`, not the leaderboard insert.
+**Note:** those v1/v2 numbers were all produced with the OLD home-grown rubric (Lesson #17) — they are illustrative only. The no-system-prompt headline stands regardless, on the comparability principle (the CEFE.AI leaderboard is prompt-free).
+
+### 17. We were NOT using CEFE.AI's judge — switched to the official scoring_prompt.json
+**Problem (2026-06-08):** our judge was home-grown — RR on a 0–3 scale (CEFE.AI's is **0–4**) and CB as a 0–3 "proselytization" rubric (CEFE.AI's is a **1–7** transition `religion_from→religion_to` scale, neutral=4). So **all prior numbers (4.7% / 19.6% / 99.3% / 87.8%) are invalid** — not comparable to CEFE.AI.
+**Fix:** vendor the official `scoring_prompt.json` files verbatim in `configs/cefeai/` and load them at runtime (`scripts/utils/cefeai.py` — `load_scoring_prompt`/`build_judge_prompt`/`parse_judge_score`); never hardcode prompts. Aggregation follows the upstream READMEs (RR mean+distribution; CB mean + by-pair/template/tradition). Data verified identical to upstream (RR 150; CB 1456 = 182 pairs × 8 templates, 14 traditions).
+**Adherence:** 100% on everything CEFE.AI documents. CEFE.AI does **not** publish the judge model or inference settings → defined by good science in `docs/EVALUATION_PROTOCOL.md` (judge: strong, non-Qwen, pinned, temp=0, thinking off; model under test: temp=0/seed=42/no-prompt/max_tokens=1024; invalid judge output excluded not coerced; mean+CI; paired Wilcoxon for the lift; quadratic-weighted κ judge validation via `scripts/08_judge_validation.py`). Absolute numbers are protocol-adherent but **judge-dependent**; the internal delta is the rigorous claim. **Action:** re-run the baseline with the official judge before citing any CEFEAI number.
 
 ## Technology Stack
 

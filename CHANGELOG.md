@@ -1,8 +1,37 @@
 # Changelog & Decision Log — OpenScriptura
 
 Chronological record of what was built, what changed, and **why** — through 2026-06-08.
-Lessons learned live in [`CLAUDE.md`](CLAUDE.md#lessons-learned-vastai--gpu-setup) (#1–#15); this file
+Lessons learned live in [`CLAUDE.md`](CLAUDE.md#lessons-learned-vastai--gpu-setup) (#1–#17); this file
 is the narrative + decision rationale. Phase detail is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+
+---
+
+## ⭐⭐ Headline correction — adopted the OFFICIAL CEFE.AI judge; all prior numbers INVALID
+
+**Date:** 2026-06-08 · **Status:** done (code) / baseline re-run pending.
+
+We discovered our judge did **not** match CEFE.AI: RR scored 0–3 (theirs is **0–4**)
+and CB scored a 0–3 "proselytization" rubric (theirs is a **1–7** transition
+`religion_from→religion_to` scale, neutral=4). **Therefore every number we'd
+reported — RR 4.7% / CB 19.6% (v1) and RR 99.3% / CB 87.8% (v2) — is invalid for
+CEFE.AI comparison** (wrong rubric), and is now kept only as a historical artifact.
+
+**Fix.** Vendor the official `scoring_prompt.json` files verbatim in
+`configs/cefeai/` and load them at runtime (`scripts/utils/cefeai.py`); never
+hardcode. Aggregate as the upstream READMEs prescribe (RR mean+distribution; CB
+mean + by pair/template/tradition). Verified our 1,606 questions are **identical**
+to upstream. Added a paired Wilcoxon test for the lift and a quadratic-weighted κ
+judge-validation script (`scripts/08_judge_validation.py`).
+
+**Adherence stance (the honest position).** We are **100% aligned with everything
+CEFE.AI documents**. The only gap is what they do **not** publish — the **judge
+model** and **inference settings** — which we define by good science in
+[`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md) (judge: strong,
+non-Qwen, pinned, temp 0, thinking off; model under test: temp 0 / seed 42 / no
+system prompt / max_tokens 1024; invalid judge output excluded, never coerced).
+So the **internal baseline→fine-tuned delta is rigorous**; **absolute** numbers are
+*protocol-adherent but judge-dependent* — we will not claim leaderboard parity
+until CEFE.AI shares the judge. **Next:** re-run the baseline with the official judge.
 
 ---
 

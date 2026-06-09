@@ -9,9 +9,35 @@
 
 ---
 
-## Evaluation protocol — v1 vs v2 (we tested v2, the data rejected it; **headline = v1, no system prompt**)
+## ⚠️ Official CEFE.AI judge — supersedes ALL prior numbers (2026-06-08)
 
-**TL;DR:** The headline, CEFEAI-comparable protocol is **v1 — NO system prompt, on both the baseline and the fine-tuned model**. We briefly tried "v2" (the same Reformed system prompt on both sides) and *ran it*. The data killed it: the prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%**, which is neither comparable to the prompt-free CEFEAI leaderboard nor able to show what fine-tuning added. v2 is retained only as an opt-in (`--system-prompt`) deployment-behavior datapoint.
+Our original judge was **home-grown** and did **not** match CEFE.AI: RR on a 0–3
+scale (theirs is **0–4**) and CB as a 0–3 "proselytization" rubric (theirs is a
+**1–7** `religion_from→religion_to` scale, neutral=4). **Every number quoted in this
+document below — RR 4.7% / CB 19.6% (v1), RR 99.3% / CB 87.8% (v2) — is therefore
+INVALID** (wrong rubric) and kept only as a historical artifact.
+
+We now vendor the **official** `scoring_prompt.json` files verbatim in
+`configs/cefeai/` and load them at runtime (RR 0–4 JSON; CB 1–7 `^Rating:\s*([1-7])\s*$`).
+Aggregation follows the upstream READMEs (RR mean + distribution; CB mean + by
+pair/template/tradition). The 1,606 questions were verified **identical** to upstream.
+
+**Adherence:** 100% on everything CEFE.AI documents. CEFE.AI does NOT publish the
+**judge model** or **inference settings** — we define those by good science in
+[`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md). So the **internal
+baseline→fine-tuned delta is rigorous**; **absolute** numbers are *protocol-adherent
+but judge-dependent* (not provably identical to their leaderboard until they reply).
+**The baseline must be re-run with the official judge before citing any CEFEAI number.**
+
+---
+
+## Evaluation protocol — v1 vs v2 (headline = v1, no system prompt)
+
+> The numbers in this section are **old-rubric (invalid)**; they remain because the
+> *no-system-prompt decision* still stands — not on the exact magnitudes, but on the
+> principle that the CEFE.AI leaderboard is prompt-free, so a system prompt isn't comparable.
+
+**TL;DR:** The headline, CEFEAI-comparable protocol is **v1 — NO system prompt, on both the baseline and the fine-tuned model**. We briefly tried "v2" (the same Reformed system prompt on both sides) and *ran it*. The data killed it: the prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%** (old rubric), which is neither comparable to the prompt-free CEFEAI leaderboard nor able to show what fine-tuning added. v2 is retained only as an opt-in (`--system-prompt`) deployment-behavior datapoint.
 
 ### The reasoning that led us to try v2
 The deployed model always runs with a Reformed system prompt, so it seemed more "realistic" to evaluate both sides with it (only the weights would differ). The extra cost (~$0.30 re-baseline + ~1 day refactor) seemed worth a deployment-realistic, valid comparison.
@@ -56,7 +82,7 @@ First model: `openscriptura/qwen3-8b-reformed-pt-br-v0.1`
 
 ## Phase 0 — Baseline (Week 1, Day 1–2)
 **Goal:** Establish the Qwen3-8B raw baseline on CEFEAI before any fine-tuning.
-**Status:** ✅ **Complete.** Headline = **v1 (no system prompt)**: RR 4.7% / CB 19.6% ($0.7902). The v2 (with-prompt) variant was also run (RR 99.3% / CB 87.8%) and **rejected as the headline** — it saturates the metric (see "Evaluation protocol — v1 vs v2" above). v1 is the comparable baseline; both are in `results/`.
+**Status:** 🔲 **Must be re-run with the official judge.** The earlier runs (v1 RR 4.7% / CB 19.6%; v2 RR 99.3% / CB 87.8%) used the **home-grown 0–3 rubric** and are **invalid** for CEFE.AI comparison (see the "Official CEFE.AI judge" banner above). Re-run headline = **v1, no system prompt**, official judge: `python scripts/00_cefeai_baseline.py --benchmark both`.
 
 ### Script: `00_cefeai_baseline.py` ✅
 - Run **150 prompts** from CEFEAI Religious Representation benchmark

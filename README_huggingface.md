@@ -31,12 +31,14 @@ OpenScriptura demonstrates that targeted fine-tuning can change this: transformi
 
 | Model | Base | Tradition | Language | Status | CEFEAI RR (baseline) | CEFEAI RR (fine-tuned) |
 |---|---|---|---|---|---|---|
-| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 final training pending | **4.7%** (no system prompt) | pending |
+| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 final training pending | pending (official-judge re-run)* | pending |
 | qwen3-8b-lutheran-en-v0.1 | Qwen3-8B | Lutheran | EN | 📋 Planned | — |
 | qwen3-8b-anglican-en-v0.1 | Qwen3-8B | Anglican | EN | 📋 Planned | — |
 | gpt-oss-20b-v1.0 | GPT-OSS 20B | Multi-tradition | Multilingual | 📋 Planned | — |
 
-> **Pipeline status:** dataset built (2,968 records); 2×2 LoRA sweep complete (winner **r=64, lr=2e-4**); final training, GGUF export, and evaluation scripts written and pending the A100 run. Evaluation headline = **no system prompt** (CEFEAI-comparable).
+> **Pipeline status:** dataset built (2,968 records); 2×2 LoRA sweep complete (winner **r=64, lr=2e-4**); final training, GGUF export, and evaluation scripts written and pending the A100 run. Evaluation uses the **official CEFE.AI judge**, headline = **no system prompt**.
+>
+> *Earlier 4.7% / 19.6% used a home-grown rubric (not CEFE.AI's) and are **invalid**; the baseline is being re-run with the official judge. See the Evaluation protocol section.
 
 Model naming: `openscriptura/{base}-{tradition}-{lang}-{version}`
 
@@ -81,7 +83,9 @@ All OpenScriptura models are evaluated on both public CEFEAI benchmarks:
 
 Results are published in each model's README with direct comparison against the untuned base model.
 
-**Evaluation protocol (headline = no system prompt).** Both the raw baseline and the fine-tuned model are evaluated with **no system prompt** and identical inference settings (`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`), so the reported lift is attributable to fine-tuning (the weights) and stays comparable to the prompt-free CEFEAI leaderboard. The raw baseline is RR 4.7% / CB 19.6%. We tested a "with system prompt" variant and rejected it as the headline: the Reformed prompt alone saturated the *raw* model to RR 99.3% / CB 87.8% (not leaderboard-comparable, and no headroom to show the fine-tuning effect). That variant is kept only as an opt-in deployment-behavior datapoint.
+**Evaluation protocol.** We score with the **official CEFE.AI judge prompts** (`scoring_prompt.json`, loaded verbatim — RR 0–4 mean+distribution; CB 1–7 mean by pair/tradition/template) on the **exact upstream questions** (verified identical). Both the raw baseline and the fine-tuned model are evaluated with **no system prompt** and identical inference settings (`temperature=0.0, seed=42, enable_thinking=False, max_tokens=1024`), so the lift is attributable to fine-tuning (the weights) and stays comparable to the prompt-free leaderboard. We are 100% adherent to everything CEFE.AI documents; the **judge model and inference settings are not published by CEFE.AI**, so we define them by good science (`docs/EVALUATION_PROTOCOL.md`) — the internal delta is rigorous, absolute numbers are protocol-adherent but judge-dependent.
+
+> ⚠️ Earlier numbers (RR 4.7% / CB 19.6%; and a with-prompt variant RR 99.3% / CB 87.8%) used a **home-grown rubric that does not match CEFE.AI** and are **invalid** — the baseline is being re-run with the official judge.
 
 ---
 

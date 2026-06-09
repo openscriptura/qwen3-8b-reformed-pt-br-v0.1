@@ -9,7 +9,7 @@
 
 ---
 
-> **Project status (June 2026):** `v0.1` work-in-progress. Phase 0 baseline ✅ (v1, no system prompt: RR 4.7% / CB 19.6%) · Phase 1 dataset ✅ (2,968 records → 2,873 train / 151 eval) · Phase 2 LoRA sweep ✅ (winner **r=64, lr=2e-4**) · Phase 3 final-training + GGUF-export and Phase 4 evaluation scripts (`05_`–`07_`) ✅ **written, reviewed, simulated** — pending the A100 run. Evaluation headline = **no system prompt** (CEFEAI-comparable): a "with system prompt" variant was tested and rejected — the prompt alone saturated the raw model to RR 99.3% / CB 87.8% (see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) → "Evaluation protocol — v1 vs v2" and [`CHANGELOG.md`](CHANGELOG.md)). The Reformed pt-BR model has not been released yet.
+> **Project status (June 2026):** `v0.1` work-in-progress. Phase 1 dataset ✅ (2,968 records → 2,873 train / 151 eval) · Phase 2 LoRA sweep ✅ (winner **r=64, lr=2e-4**) · Phase 3 + Phase 4 scripts (`05_`–`08_`) ✅ **written, reviewed, simulated** — pending the A100 run. **Evaluation now uses the OFFICIAL CEFE.AI judge** (`configs/cefeai/*.json`, RR 0–4 / CB 1–7), headline = **no system prompt**. ⚠️ Our earlier numbers (RR 4.7% / CB 19.6%, and a with-prompt variant 99.3% / 87.8%) used a **home-grown rubric that does not match CEFE.AI** and are **invalid** — the baseline is being re-run with the official judge. We are 100% adherent to everything CEFE.AI documents; the judge model + inference settings they leave unspecified are defined by good science (see [`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md), [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md), [`CHANGELOG.md`](CHANGELOG.md)). The Reformed pt-BR model has not been released yet.
 
 ## What is OpenScriptura
 
@@ -31,7 +31,7 @@ Base models — CEFEAI Religious Representation (June 2026, 150 questions):
   Grok 4.20        ████░░░░░░░░░░░░░░░░  29.3% Any Representation
   Mistral Large    ████░░░░░░░░░░░░░░░░  23.3%
   GPT-5.4          ███░░░░░░░░░░░░░░░░░  17.3%
-  Qwen3-8B base    █░░░░░░░░░░░░░░░░░░░   4.7%   ← our measured v1 baseline (no system prompt)
+  Qwen3-8B base    (pending)             ← re-run with the OFFICIAL CEFE.AI judge; our earlier 4.7% used a non-matching rubric (invalid)
   Claude Opus 4.7  █░░░░░░░░░░░░░░░░░░░   4.0%
   Llama 4 Scout    ░░░░░░░░░░░░░░░░░░░░   3.3%
 

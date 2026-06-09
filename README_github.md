@@ -29,7 +29,7 @@ Base models — CEFEAI Religious Representation (June 2026, 150 questions):
   Grok 4.20        ████░░░░░░░░░░░░░░░░  29.3% Any Representation
   Mistral Large    ████░░░░░░░░░░░░░░░░  23.3%
   GPT-5.4          ███░░░░░░░░░░░░░░░░░  17.3%
-  Qwen3-8B base    █░░░░░░░░░░░░░░░░░░░   4.7%   ← our measured baseline (2026-06-07)
+  Qwen3-8B base    (pending)             ← re-run with the OFFICIAL CEFE.AI judge; our earlier 4.7% used a non-matching rubric (invalid)
   Claude Opus 4.7  █░░░░░░░░░░░░░░░░░░░   4.0%
   Llama 4 Scout    ░░░░░░░░░░░░░░░░░░░░   3.3%
 
@@ -63,21 +63,25 @@ OpenScriptura is designed to serve the full breadth of Protestant Christianity. 
 
 | Model | Base | Tradition | Language | CEFEAI RR (baseline) | CEFEAI RR (fine-tuned) | Download |
 |---|---|---|---|---|---|---|
-| `qwen3-8b-reformed-pt-br-v0.1` | Qwen3-8B | Reformed | PT-BR | 4.7% (v1, no system prompt) | 🔄 Phase 3 pending | [HF Hub](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) |
+| `qwen3-8b-reformed-pt-br-v0.1` | Qwen3-8B | Reformed | PT-BR | pending (official-judge re-run)¹ | 🔄 Phase 3 pending | [HF Hub](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) |
 | `qwen3-8b-lutheran-en-v0.1` | Qwen3-8B | Lutheran | EN | 📋 planned | — |
 | `gpt-oss-20b-v1.0` | GPT-OSS 20B | Multi-tradition | Multilingual | 📋 planned | — |
 
 Model naming convention: `openscriptura/{base}-{tradition}-{lang}-{version}`
 
-**Status:** dataset built (2,968 records) · 4-config LoRA sweep complete (winner **r=64, lr=2e-4**) · Phase 3 final training + GGUF export scripts written · evaluation upgraded to **protocol v2** (see below).
+¹ Our earlier baseline (RR 4.7% / CB 19.6%) was scored with a **home-grown rubric that does not match CEFE.AI** (we used RR 0–3 / CB 0–3; CEFE.AI is RR **0–4** / CB **1–7**). It is **invalid** for comparison and will be replaced by a re-run with the **official judge** (`configs/cefeai/`). See the Evaluation Protocol section.
+
+**Status:** dataset built (2,968 records) · 4-config LoRA sweep complete (winner **r=64, lr=2e-4**) · Phase 3 + eval scripts written · **switched to the official CEFE.AI judge** — baseline re-run pending.
 
 ---
 
 ## Evaluation Protocol — headline is **v1 (no system prompt)**
 
-CEFEAI comparisons use **no system prompt**, on both the raw baseline and the fine-tuned model. The fine-tuning lives in the weights, so a no-prompt fine-tuned model is compared against the no-prompt raw baseline (RR 4.7% / CB 19.6%) — a delta that is leaderboard-comparable and isolates what fine-tuning added.
+We score with the **official CEFE.AI judge prompts** (`configs/cefeai/*.json`, loaded verbatim — RR 0–4 mean+distribution; CB 1–7 mean by pair/tradition/template) and the **exact upstream questions** (verified identical). CEFEAI comparisons use **no system prompt**, on both the raw baseline and the fine-tuned model — the fine-tuning lives in the weights, so the no-prompt fine-tuned model is compared against the no-prompt raw baseline. We are 100% adherent to everything CEFE.AI documents; the judge model and inference settings are **not** published by CEFE.AI, so we define them by good science (`docs/EVALUATION_PROTOCOL.md`) — our internal delta is rigorous, while absolute numbers are protocol-adherent but judge-dependent.
 
-We also *tested* a "v2" protocol (the same Reformed system prompt on both sides) and **ran it** — then rejected it. The prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%**, which (a) isn't comparable to the prompt-free CEFEAI leaderboard and (b) leaves no headroom to show what fine-tuning added. So v1 is the headline; v2 is retained only as an opt-in `--system-prompt` deployment-behavior datapoint, never a leaderboard number. (Inference settings are fixed throughout: `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`.)
+> ⚠️ Our earlier numbers (RR 4.7% / CB 19.6%) used a non-matching home-grown rubric and are **invalid** — the baseline will be re-run with the official judge.
+
+We also *tested* a "v2" protocol (the same Reformed system prompt on both sides) and **ran it** — then rejected it. The prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%**, which (a) isn't comparable to the prompt-free CEFEAI leaderboard and (b) leaves no headroom to show what fine-tuning added. So v1 is the headline; v2 is retained only as an opt-in `--system-prompt` deployment-behavior datapoint, never a leaderboard number. (Inference settings, fixed throughout and identical on both sides: model `temperature=0.0, seed=42, enable_thinking=False, max_tokens=1024`; judge `temperature=0.0, enable_thinking=False`. Those 99.3% / 87.8% figures are old-rubric and will be regenerated with the official judge.)
 
 ---
 
@@ -174,7 +178,7 @@ cp .env.example .env
 ### Run CEFEAI baseline
 
 ```bash
-# Headline: v1, NO system prompt (CEFEAI-comparable) → RR 4.7% / CB 19.6%. ~$0.30 | ~2h
+# Headline: v1, NO system prompt, official judge (CEFEAI-comparable). ~$0.30 | ~2h
 python scripts/00_cefeai_baseline.py --benchmark both
 
 # Optional: v2 deployment-behavior datapoint (NOT comparable — prompt saturates the metric)
