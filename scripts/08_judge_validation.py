@@ -93,6 +93,68 @@ def do_sample(args) -> None:
              key_path)
 
 
+def _parse_label(s: str, lo: int, hi: int):
+    """Parse a labeler keystroke → ('score', int) | ('skip',) | ('quit',) | ('bad',)."""
+    s = s.strip().lower()
+    if s in ("q", "quit"):
+        return ("quit",)
+    if s in ("s", "skip"):
+        return ("skip",)
+    try:
+        v = int(s)
+    except ValueError:
+        return ("bad",)
+    return ("score", v) if lo <= v <= hi else ("bad",)
+
+
+def _atomic_write_jsonl(path: Path, rows: list[dict]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    tmp.replace(path)
+
+
+def do_label(args) -> None:
+    """Guided interactive labeling — shows prompt+response, validates the score, and
+    writes human_score back atomically (resumable). Avoids hand-editing the JSONL."""
+    rows = _read_jsonl(args.labels)
+    lo, hi = SCALE[args.benchmark]
+    scale = load_scoring_prompt(args.benchmark).get("rating_scale", {}) or {}
+    todo = [r for r in rows if not isinstance(r.get("human_score"), int)]
+    print("=" * 70)
+    print(f"  Rotulagem {args.benchmark.upper()} — {len(rows) - len(todo)}/{len(rows)} já feitos. Escala {lo}-{hi}:")
+    for k in sorted(scale, key=lambda x: int(x)):
+        print(f"    {k} = {scale[k]}")
+    print("  Comandos:  número = nota  |  s = pular  |  q = salvar e sair")
+    print("=" * 70)
+    changed = False
+    try:
+        for r in rows:
+            if isinstance(r.get("human_score"), int):
+                continue
+            print("\n" + "-" * 70)
+            tail = f"   [{r.get('transition')}]" if r.get("transition") else ""
+            print(f"id: {r.get('prompt_id')}{tail}")
+            print(f"\nPROMPT:\n{r.get('prompt')}")
+            print(f"\nRESPOSTA:\n{(r.get('response') or '')[:1800]}")
+            while True:
+                kind = _parse_label(input(f"\nnota [{lo}-{hi}] / s / q: "), lo, hi)
+                if kind[0] == "score":
+                    r["human_score"] = kind[1]; changed = True; break
+                if kind[0] == "skip":
+                    break
+                if kind[0] == "quit":
+                    if changed:
+                        _atomic_write_jsonl(args.labels, rows)
+                    print("\nSalvo. Rode de novo --label para continuar, ou --score ao terminar.")
+                    return
+                print(f"  inválido — inteiro {lo}-{hi}, 's' (pular) ou 'q' (sair).")
+    finally:
+        if changed:
+            _atomic_write_jsonl(args.labels, rows)
+    n_lab = sum(1 for r in rows if isinstance(r.get("human_score"), int))
+    print(f"\n✅ {n_lab}/{len(rows)} rotulados. Rode --score para calcular o κ.")
+
+
 def do_score(args) -> None:
     rows = _read_jsonl(args.labels)
     lo, hi = SCALE[args.benchmark]
@@ -151,10 +213,11 @@ def main() -> None:
     p.add_argument("--benchmark", choices=["rr", "cb"], required=True)
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--sample", action="store_true", help="draw a human-labeling template")
+    mode.add_argument("--label", action="store_true", help="interactively fill a template (guided, resumable)")
     mode.add_argument("--score", action="store_true", help="compute κ from a filled template")
     p.add_argument("--results", type=Path, help="[--sample] results JSONL to sample from")
     p.add_argument("--out", type=Path, help="[--sample] template output path")
-    p.add_argument("--labels", type=Path, help="[--score] filled template path")
+    p.add_argument("--labels", type=Path, help="[--label/--score] template path")
     p.add_argument("--n", type=int, default=50, help="[--sample] sample size (default 50)")
     p.add_argument("--seed", type=int, default=42, help="[--sample] RNG seed (default 42)")
     args = p.parse_args()
@@ -168,11 +231,11 @@ def main() -> None:
         do_sample(args)
     else:
         if not args.labels:
-            p.error("--score requires --labels")
+            p.error("--label/--score require --labels")
         if not args.labels.exists():
             log.error("labels file not found: %s", args.labels)
             sys.exit(1)
-        do_score(args)
+        do_label(args) if args.label else do_score(args)
 
 
 if __name__ == "__main__":

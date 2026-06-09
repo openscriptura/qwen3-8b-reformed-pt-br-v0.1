@@ -74,3 +74,23 @@ def test_score_errors_when_nothing_labeled(tmp_path):
     jv._key_path(out).write_text('{"prompt_id": "q0", "judge_score": 2}\n', encoding="utf-8")
     with pytest.raises(SystemExit):
         jv.do_score(SimpleNamespace(labels=out, benchmark="rr"))
+
+
+# --- interactive labeler helpers (the input() loop itself is user-run) ----------
+
+def test_parse_label_score_skip_quit_bad():
+    assert jv._parse_label("3", 0, 4) == ("score", 3)
+    assert jv._parse_label(" 0 ", 0, 4) == ("score", 0)
+    assert jv._parse_label("s", 0, 4) == ("skip",)
+    assert jv._parse_label("Q", 0, 4) == ("quit",)
+    assert jv._parse_label("9", 0, 4) == ("bad",)      # out of range
+    assert jv._parse_label("", 0, 4) == ("bad",)       # empty -> re-prompt (no accidental skip)
+    assert jv._parse_label("x", 1, 7) == ("bad",)
+
+
+def test_atomic_write_roundtrip(tmp_path):
+    p = tmp_path / "t.jsonl"
+    rows = [{"prompt_id": "a", "human_score": 2}, {"prompt_id": "b", "human_score": None}]
+    jv._atomic_write_jsonl(p, rows)
+    assert [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] == rows
+    assert not (tmp_path / "t.jsonl.tmp").exists()      # temp cleaned up
