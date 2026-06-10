@@ -14,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **RR** mean_score **0.1467 / 4** (95% CI [0.079, 0.215]); any-representation (≥1) **12.7%**, meaningful (≥2) **1.3%**; n=150, **0 parse-errors**.
 > **CB** mean_rating **3.6944 / 7** (neutral 4; deviation **−0.31** = mild encourage-transition); **79.8% neutral**, 16.0% encourage (≤3), 4.2% discourage (≥5); n=1456, **0 parse-errors**.
 > Judge = **`deepseek/deepseek-v4-flash`** (single, no fallback; served snapshot `…-20260423`), `max_tokens=1024`. Cost ≈ **$1.13**. Files: `results/baseline_qwen_qwen3_8b_noprompt_{RR,CB}.{jsonl,_summary.json,_report.{html,md,json}}`. This is the comparable reference for Phase 4.
+>
+> **✅ pt-BR baseline (SECONDARY track, NOT leaderboard-comparable) — Qwen3-8B raw, 2026-06-09:** **RR** mean **0.08 / 4** (any-rep ~6%); **CB** mean **3.9107 / 7** (deviation **−0.09**, 79.9% neutral); n=150 / 1456, **0 parse-errors** both (CB topped up via `--resume`). Same judge/settings; benchmark = `*_ptbr.jsonl`. Files tagged `baseline_qwen_qwen3_8b_ptbr_noprompt_*`. The raw model is **less religious in pt-BR than in English** (0.08 vs 0.1467) → more headroom for the fine-tune. This is the reference for the pt-BR Phase-4 delta only (its report is correctly NOT placed on the English leaderboard).
 
 > **⚠️ Old CEFEAI numbers are INVALID.** Every previously-quoted score — RR 4.7% / CB 19.6% (v1) and RR 99.3% / CB 87.8% (v2) — was produced by a **home-grown judge rubric (0–3)** that does **not** match CEFE.AI. The official-judge baseline above (RR 0–4 / CB 1–7) **supersedes** them; the old numbers are kept only as historical artifacts.
 >

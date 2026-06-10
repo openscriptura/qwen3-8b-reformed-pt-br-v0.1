@@ -1,7 +1,7 @@
 # OpenScriptura — Implementation Plan
 > Consenso dos 539 PhDs. Última revisão: 2026-06-09. **Phase 0 baseline DONE (official flash judge)**; Phase 1/2 complete; Phase 3/4 scripts written; **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
 >
-> **✅ Phase 0 baseline (2026-06-09, official judge, no-prompt):** RR mean **0.1467/4** (any-rep **12.7%**); CB mean **3.6944/7** (deviation **−0.31**, 79.8% neutral); judge `deepseek/deepseek-v4-flash` (single, no fallback, `max_tokens=1024`); **0 parse-errors** both; cost ≈ $1.13. This is the comparable reference for Phase 4.
+> **✅ Phase 0 baseline (2026-06-09, official judge, no-prompt):** **EN (CEFE.AI headline):** RR mean **0.1467/4** (any-rep **12.7%**, 9th of 28 public models); CB mean **3.6944/7** (deviation **−0.31**, 79.8% neutral). **pt-BR (secondary, not leaderboard-comparable):** RR mean **0.08/4**; CB mean **3.9107/7** (deviation **−0.09**). Judge `deepseek/deepseek-v4-flash` (single, no fallback, `max_tokens=1024`); **0 parse-errors** on all four runs; cost ≈ $1.13 (EN) + ~$1.1 (pt-BR). EN is the comparable reference for the Phase-4 leaderboard claim; pt-BR is the deployment-truth reference for the pt-BR delta.
 
 ---
 
