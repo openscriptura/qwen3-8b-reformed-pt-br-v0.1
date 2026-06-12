@@ -542,10 +542,17 @@ Ideas surfaced during v0.1 that we deliberately **do not** implement now (to kee
 scope tight and the CEFE.AI comparability clean), but that should be revisited next.
 
 ### 1. Multi-annotator judge validation (inter-annotator agreement)
-v0.1 validates the judge against **one** human labeler (κ: EN RR 0.80, CB 0.63 —
-`docs/JUDGE_VALIDATION.md`). For stronger, publication-grade defensibility of the
-**absolute** numbers, use **2–3 theologically-literate annotators** (ideally
-including a Reformed pastor) on the same blind, stratified sample and report:
+v0.1 validates the judge against **one** human labeler (κ: EN RR 0.80 / CB 0.63;
+pt-BR RR 0.79 / CB 0.98 — `docs/JUDGE_VALIDATION.md`). For stronger,
+publication-grade defensibility of the **absolute** numbers, use **2–3
+theologically-literate annotators** (ideally including a Reformed pastor) on the same
+blind, stratified sample and report:
+- **Native-speaker annotators per language track.** v0.1's single annotator is a
+  native pt-BR speaker; CB EN (κ=0.63) vs CB pt-BR (κ=0.98) shows the gap concentrates
+  on the *tonal* affirmation-vs-encouragement call — exactly the dimension most
+  sensitive to language fluency. A native-English annotator should label the EN track
+  and a native-pt-BR annotator the pt-BR track, so the κ measures judge quality, not
+  the annotator's second-language fluency.
 - **Inter-annotator agreement (IAA = human↔human κ)** — the *ceiling*. The judge's κ
   must be read against the IAA, not against 1.0 (you cannot expect the judge to agree
   with humans more than humans agree with each other — especially on the subjective

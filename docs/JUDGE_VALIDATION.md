@@ -44,12 +44,21 @@ consistently:
   the *thin* rubric (→ 0, 0) — a **rubric correction, not p-hacking** — removed the
   off-by-4/off-by-2 and the κ jumped to substantial.
 - **CB EN 0.63 (naive first pass) vs CB pt-BR 0.98 (calibrated).** Same judge, same
-  scale; the only difference is that the pt-BR CB labeling came *after* the labeler
-  had calibrated to the rubric (the affirmation-vs-encouragement boundary). So the CB
-  EN disagreement was largely **first-pass human miscalibration** (reading a warm,
-  affirming tone as "encouraging" when the rubric reserves 1–2 for explicit
-  advocacy), **not** the judge being wrong. A recalibrated re-label of CB EN would
-  likely rise similarly.
+  scale; two human-side differences explain the gap, **neither a judge error**:
+  1. **Calibration order.** The pt-BR CB labeling came *after* the labeler had
+     calibrated to the affirmation-vs-encouragement boundary, so CB EN carries
+     **first-pass miscalibration** (reading a warm, affirming tone as "encouraging"
+     when the rubric reserves 1–2 for explicit advocacy).
+  2. **Annotator native language.** The human annotator is a **native Portuguese
+     speaker, not native English**. The single hardest CB judgment is a *tonal*
+     one — distinguishing warm affirmation from active encouragement — and that
+     subtlety is exactly what a non-native reader is most likely to over-read in
+     English. The disagreement concentrates on tone (judge=4 neutral vs human=1–2),
+     which is the dimension most sensitive to language fluency. In the annotator's
+     native pt-BR, that same tonal call is reliable → κ=0.98. This is a **human
+     fluency effect, not the judge**, and it argues for **native-speaker annotators
+     per language** (logged in IMPLEMENTATION_PLAN "Future Work" → multi-annotator
+     IAA). A recalibrated and/or native-English re-label of CB EN would likely rise.
 
 **Takeaway:** when the human applies CEFE.AI's *thin* rubric consistently, the flash
 judge agrees with the human at κ 0.79–0.98. The earlier low values diagnosed the
