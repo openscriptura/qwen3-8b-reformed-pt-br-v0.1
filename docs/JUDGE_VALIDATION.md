@@ -88,11 +88,13 @@ Confusion (judge ↓ vs human →):
 
 ## Interpretation
 
-1. **The headline claim (the delta) is rigorous regardless of κ.** Both the RR
-   leniency (+0.16) and the CB affirmation→neutral tendency (+0.38) are *systematic*
-   and applied to **both** the baseline and the fine-tuned model, so they **cancel**
-   in the paired baseline→fine-tuned delta. "Fine-tuning moved CEFE.AI by N points"
-   stands.
+1. **The headline claim (the delta) is robust to these *systematic* biases — but not
+   to every error (see "Reading a low κ" below).** The RR leniency (+0.16) and the CB
+   affirmation→neutral tendency (+0.38) are *systematic* and applied to **both** the
+   baseline and the fine-tuned model, so they **cancel** in the paired delta — "fine-
+   tuning moved CEFE.AI by N points" stands. The caveat: this holds only if the judge
+   error is *not correlated with the fine-tuning effect* (the religious content the
+   fine-tune adds). That assumption must itself be tested — see below.
 2. **Absolute numbers carry documented calibration caveats:**
    - RR: the judge may slightly **over-count** faint religious mentions (the 0↔1
      leniency) → "any-representation %" is, if anything, a mild over-estimate.
@@ -103,11 +105,53 @@ Confusion (judge ↓ vs human →):
    borderline validation. If a stronger absolute CB claim is needed, escalate the
    judge to the `pro` tier with a non-reasoning provider pinned, or label more.
 
-## Escalation criterion
+## Reading a low κ — causes, what it breaks, and escalation
 
-If any track's κ falls below 0.6 (or the calibration caveat is unacceptable for an
-absolute claim), escalate from `deepseek-v4-flash` to `deepseek-v4-pro` **with a
-non-reasoning provider pinned** (DeepInfra / DigitalOcean / Together / Alibaba showed
-0% reasoning-token overflow — see CLAUDE.md Lesson #18), re-run the affected
-baseline, and re-validate. The internal delta does not require this; only the
-defensibility of the absolute numbers does.
+κ ≥ 0.6 (Landis–Koch "substantial") is a **convention, not a law.** A low κ is a
+red flag to *diagnose*, not to wave away — and not to panic over either. It has
+**three distinct causes**, and only one is "the judge is wrong":
+
+1. **Human rubric misapplication** — the human applied the wrong rule (e.g. the
+   "thick-religion" reading: scoring a gender-ideology answer as 4 when CEFE.AI's
+   *thin* rubric makes it 0; see q0019 in the pt-BR RR sample). *Fix the labels, not
+   the judge.* Diagnose: re-read the off-by-≥2 cases against the official rubric.
+2. **Task subjectivity** — humans don't agree with each other either (the CB
+   affirmation-vs-encouragement boundary). The judge **cannot** beat the human↔human
+   ceiling. Diagnose: measure **inter-annotator agreement (IAA)** and read the
+   judge's κ *against the IAA*, not against 1.0. (This needs ≥2 annotators — see
+   IMPLEMENTATION_PLAN "Future Work".)
+3. **The judge is genuinely wrong** — it mis-scores against a correct, stable human
+   standard (humans agree with each other, but the judge doesn't; gross off-by-≥2
+   errors, not boundary noise). *This* is the real failure mode.
+
+**What a genuinely-wrong judge breaks:**
+
+| | Effect |
+|---|---|
+| **Absolute numbers** | Wrong — **not publishable** until the judge is fixed. |
+| **Delta — systematic error** (constant offset) | **Cancels** (both sides carry it). Delta safe. |
+| **Delta — random error** (mean-zero noise) | Averages out in the mean (n=150/1456); the paired test absorbs it. Delta safe, wider CI. |
+| **Delta — error correlated with the fine-tuning effect** | **BREAKS the delta.** ⚠️ The real danger. |
+
+**The danger specific to this project.** The fine-tuned model produces *more*
+religious / Reformed content. Our κ here is measured on the **baseline distribution,
+which is ~90% secular (score 0 / neutral 4)** — so it validates the judge on
+*secular* responses, **not** on the religious responses the fine-tune will generate.
+If the judge mis-scores religious content specifically, that error is **correlated
+with the treatment** and would bias the delta. **Therefore the judge MUST also be
+validated on the fine-tuned model's (higher-representation) responses in Phase 4** —
+draw a κ sample from `eval_*` results, not just the baseline. Agreement on *both*
+regimes is what makes the delta trustworthy; agreement only on the secular baseline
+is not sufficient.
+
+**Escalation ladder (when cause 3 is confirmed):**
+1. The judge prompt is the **official vendored** CEFE.AI rubric — do NOT edit it
+   (that breaks comparability). So escalation is by **model**, not prompt.
+2. Escalate `deepseek-v4-flash` → `deepseek-v4-pro` **with a non-reasoning provider
+   pinned** (DeepInfra / DigitalOcean / Together / Alibaba showed 0% reasoning-token
+   overflow — Lesson #18) → if still poor, a **frontier non-Qwen judge** (Claude /
+   GPT tier). Re-run the affected baseline + fine-tuned, re-validate κ.
+3. **Worst case, stay honest:** if no judge beats the human IAA, the absolute numbers
+   are **not claimed** — report only the delta (with the caveat), or report that the
+   benchmark is too subjective for an automated judge. A low κ that is genuinely the
+   judge's fault is fixed by escalation or disclosure, **never by rationalization**.
