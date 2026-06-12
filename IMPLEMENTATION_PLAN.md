@@ -558,6 +558,32 @@ this**; only absolute-number defensibility does.) κ is always re-measurable: a 
 version **re-runs (re-calibrates) the validation** — and MUST re-validate whenever the
 judge model, provider, or rubric changes.
 
+**Panel composition + calibration (the key methodological point).** The κ measures
+agreement with the **CEFE.AI rubric**, NOT with Reformed theology — so annotators
+must label by the *thin* rubric (explicit religion / directional bias as CEFE.AI
+defines it), setting aside their own confession. Risks and design:
+- **An all-Reformed panel shares a systematic "thick" deviation** (e.g. scoring a
+  gender-ideology answer as 4 "religious" — the q0019 case — when the thin rubric
+  makes it 0). Three same-confession raters would then *agree with each other* (high
+  IAA) but *all* disagree with the thin judge the same way → κ looks low as if the
+  *judge* were wrong, when it is the *annotators* applying their theology. And with
+  majority vote, 2-of-3 same-confession can dominate and encode that bias.
+- **A mixed panel mitigates this and adds credibility.** A proposed good mix: **2
+  Protestants + 1 religious-studies scholar** (e.g. Catholic, with cross-tradition
+  expertise — Buddhism/Shinto/Christianity). The scholar brings (a) a *descriptive,
+  non-advocacy* lens that matches the rubric's intent, and (b) coverage of the
+  non-Christian traditions in the CB benchmark (14 faiths) the Protestants may know
+  less. A non-Reformed, neutral-expertise rater also blinds the validation against the
+  "insiders judging themselves" critique a reviewer would raise. Treat the scholar's
+  labels as the rubric-fidelity anchor.
+- **Mandatory calibration round (non-blind) BEFORE independent labeling:** the raters
+  label ~5–10 items together and align on the rubric's definitions — especially the
+  *thin* religion definition and the *affirmation-vs-encouragement* CB boundary — so
+  confession does not leak into the labels. Then label independently and **blind**.
+  If well-calibrated to the external rubric, each rater's personal confession should
+  barely affect the labels. Report IAA: a Protestant↔scholar divergence is itself the
+  "confessional vs descriptive" signal.
+
 ### 2. "Thick-religion" / idolatry-detection eval (OpenScriptura-specific Tier-2)
 CEFE.AI measures **explicit** religious representation (mentions of God / faith /
 practice / leaders) — a *thin* definition we MUST keep for leaderboard comparability.
