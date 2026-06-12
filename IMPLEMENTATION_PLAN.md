@@ -536,6 +536,53 @@ The model does NOT blend traditions — a Reformed model speaks Reformed only.
 
 ---
 
+## Future Work & Recommendations (out of scope for v0.1 — for v0.2+)
+
+Ideas surfaced during v0.1 that we deliberately **do not** implement now (to keep
+scope tight and the CEFE.AI comparability clean), but that should be revisited next.
+
+### 1. Multi-annotator judge validation (inter-annotator agreement)
+v0.1 validates the judge against **one** human labeler (κ: EN RR 0.80, CB 0.63 —
+`docs/JUDGE_VALIDATION.md`). For stronger, publication-grade defensibility of the
+**absolute** numbers, use **2–3 theologically-literate annotators** (ideally
+including a Reformed pastor) on the same blind, stratified sample and report:
+- **Inter-annotator agreement (IAA = human↔human κ)** — the *ceiling*. The judge's κ
+  must be read against the IAA, not against 1.0 (you cannot expect the judge to agree
+  with humans more than humans agree with each other — especially on the subjective
+  CB "affirmation vs encouragement" boundary we found).
+- **Judge vs the human consensus/majority**, not vs a single labeler.
+Recommended count: **3** (majority vote breaks ties; NLP standard) or **2 +
+adjudication** as the minimum. Reuse `08_judge_validation.py` extended to accept
+multiple label files → IAA + judge-vs-majority. (The **internal delta never needed
+this**; only absolute-number defensibility does.) κ is always re-measurable: a future
+version **re-runs (re-calibrates) the validation** — and MUST re-validate whenever the
+judge model, provider, or rubric changes.
+
+### 2. "Thick-religion" / idolatry-detection eval (OpenScriptura-specific Tier-2)
+CEFE.AI measures **explicit** religious representation (mentions of God / faith /
+practice / leaders) — a *thin* definition we MUST keep for leaderboard comparability.
+But from a Reformed/Augustinian lens all of life is religious: modern ideologies
+(wokism, Marxism, scientism, nationalism, consumerism…) are **functional religions /
+idolatries** with their own soteriology and orthodoxy. A response that frames an issue
+through such an ideology is, theologically, religious — yet scores **0** on CEFE.AI's
+thin RR (correctly, by their rubric).
+
+Future, **project-specific, NOT-leaderboard-comparable** benchmark: does the model
+**recognize modern ideologies as functional religion/idolatry, name them, and point to
+Christ** (confessional discernment)? This is arguably the **distinctive contribution**
+of a Reformed model — secular models are blind to ideological idolatry; a confessional
+one should not be. Build it as a separate eval (its own prompt set + judge rubric),
+clearly labeled as a *thick-religion* metric distinct from the *thin* CEFE.AI one. Do
+NOT fold it into the CEFE.AI κ or rubric (that would break the HARD RULE).
+
+### 3. Smaller, cheaper hardening (any version)
+- Larger κ sample (n≈100) for a tighter confidence interval if a borderline κ (CB 0.63)
+  needs to be defended more strongly.
+- Escalate the judge to `deepseek-v4-pro` + a pinned non-reasoning provider if the
+  flash absolute numbers ever prove insufficiently defensible (Lesson #18).
+
+---
+
 ## Immediate Next Actions
 
 ```
