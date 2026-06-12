@@ -575,7 +575,33 @@ one should not be. Build it as a separate eval (its own prompt set + judge rubri
 clearly labeled as a *thick-religion* metric distinct from the *thin* CEFE.AI one. Do
 NOT fold it into the CEFE.AI κ or rubric (that would break the HARD RULE).
 
-### 3. Smaller, cheaper hardening (any version)
+### 3. Judge ensemble / panel (3 judges, different model families)
+The strongest mitigation for **judge-model training bias** (a single model's lean —
+e.g. DeepSeek's "both-sides/neutral" tendency that read affirming CB answers as
+neutral): score each item with **3 judges from different families** (e.g. DeepSeek +
+a Claude + a GPT tier), same vendored prompt, and aggregate.
+- **Aggregation = MEDIAN of the 3, not "two-equal majority".** On the fine ordinal
+  scales (RR 0–4, CB 1–7) exact ties are uncommon, so a "discard the odd one / else
+  escalate to 5" rule fires constantly and may never converge on a genuinely
+  ambiguous item. The median auto-discards the outlier, always converges, and
+  respects ordinality. (NB: this is *bias/representation* scoring, not *quality* — so
+  it is median/majority, **not** "take the two best, drop the worst", which is a
+  quality-scoring rule.) Treat a large **spread** across the 3 as a "high
+  disagreement / ambiguous item" signal rather than escalating.
+- **Comparability tradeoff (important):** an ensemble is fine for the **internal
+  delta** (use the *same* ensemble on both sides — the bias cancels and the delta is
+  *more* robust). But CEFE.AI used a **single** judge, so a 3-judge ensemble moves our
+  **absolute** numbers further from their methodology. A single judge stays "closer to
+  what CEFE.AI did"; the ensemble is more robust but a different process. Keep the
+  single-judge run in parallel if both robustness and leaderboard-proximity matter.
+- **Cheap first step (do before a full ensemble):** run the 3 judges on **only the
+  ~50-item κ sample** (not all 1,606). This decisively answers "does flash alone agree
+  with the ensemble? does the ensemble agree with the human better than flash?" at
+  negligible cost — a strong cross-check of the single-judge choice before committing
+  to 3× the judge spend on the whole benchmark. (Idea validated with the user, who has
+  used 3-LLM judging on a prior translation-scoring project.)
+
+### 4. Smaller, cheaper hardening (any version)
 - Larger κ sample (n≈100) for a tighter confidence interval if a borderline κ (CB 0.63)
   needs to be defended more strongly.
 - Escalate the judge to `deepseek-v4-pro` + a pinned non-reasoning provider if the
