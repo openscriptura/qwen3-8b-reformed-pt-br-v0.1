@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **Two eval tracks (the product is pt-BR, the science needs English):** `en` = the official **English** CEFE.AI — the **leaderboard-comparable scientific anchor** (the "vs Grok/GPT" claim). `ptbr` = a **translated** track — **deployment-realistic**, since the deployed model is Brazilian Portuguese. English stays the comparable HEADLINE (HARD RULE); pt-BR is the secondary, NOT-leaderboard-comparable, product-truth number. Mechanics: "Two evaluation language tracks (`--lang`)" below. **Rationale (what each track answers): `docs/EVALUATION_PROTOCOL.md` §6.**
 
-**Status:** Phase 0 ✅ (**official-judge baseline DONE 2026-06-09** — see numbers below) · Phase 1 ✅ (2,968 records: 839 C + 2,129 B) · Phase 2 ✅ (4 configs run; **winner exp_c** r=64 lr=2e-4, eval_all_loss 0.6527) · Phase 3 scripts ✅ written, run 🔲 · Phase 4 scripts ✅ written, run 🔲
+**Status:** Phase 0 ✅ (**official-judge baseline DONE 2026-06-09** — see numbers below) · Phase 1 ✅ (2,968 records: 839 C + 2,129 B) · Phase 2 ✅ (4 configs run; **winner exp_c** r=64 lr=2e-4, eval_all_loss 0.6527) · Phase 3 ✅ (**final model trained 2026-06-12** on H100; exp_c, checkpoint-325, eval_all_loss 0.6546) · Phase 4 ✅ (**both tracks evaluated** — EN CB Δ−0.195 *p=3.9e-6*; **pt-BR RR 0.08→0.62 large effect** *p=3.7e-6*; CB Any-Bias 20%→~64%; scorecard `docs/PHASE4_RESULTS.md`) · **v0.1.1 in progress** (qualitative probe found TULIP hallucination / repetition loop / over-accommodation → **Tier A: 57 curated pastoral-reviewed examples** via `scripts/build_tier_a.py`; retrain pending. Lessons: `docs/LESSONS.md`)
 
 > **✅ Phase 0 baseline (official judge, headline v1 no-prompt) — Qwen3-8B raw, 2026-06-09:**
 > **RR** mean_score **0.1467 / 4** (95% CI [0.079, 0.215]); any-representation (≥1) **12.7%**, meaningful (≥2) **1.3%**; n=150, **0 parse-errors**.
@@ -360,6 +360,8 @@ Verify the GPU is clear with `nvidia-smi` (0 MiB, "No running processes") before
 - [`VALIDATION_REPORT.md`](VALIDATION_REPORT.md) — PhD review panel findings (M-items)
 - [`README_github.md`](README_github.md) — project vision, dataset schema, roadmap
 - [`README_huggingface.md`](README_huggingface.md) — HuggingFace model/dataset card
+- [`docs/LESSONS.md`](docs/LESSONS.md) — fine-tuning / evaluation / anti-hallucination lessons (fine-tune=form, RAG=facts; qualitative testing; abstention; RR≠CB)
+- [`docs/PHASE4_RESULTS.md`](docs/PHASE4_RESULTS.md) — baseline→fine-tuned scorecard (EN + pt-BR, both benchmarks)
 - [`docs/THEOLOGICAL_STATEMENT.md`](docs/THEOLOGICAL_STATEMENT.md) — confessional scope
 - [`docs/PASTORAL_REVIEW_PROTOCOL.md`](docs/PASTORAL_REVIEW_PROTOCOL.md) — Tier A pastoral review process
 

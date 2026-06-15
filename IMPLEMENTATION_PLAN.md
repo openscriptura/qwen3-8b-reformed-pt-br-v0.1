@@ -1,5 +1,5 @@
 # OpenScriptura — Implementation Plan
-> Consenso dos 539 PhDs. Última revisão: 2026-06-09. **Phase 0 baseline DONE (official flash judge)**; Phase 1/2 complete; Phase 3/4 scripts written; **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
+> Consenso dos 539 PhDs. Última revisão: 2026-06-15. **Phase 0 baseline DONE (official flash judge)**; Phase 1/2 complete; **Phase 3 DONE (v0.1 trained 2026-06-12, exp_c, ckpt-325) · Phase 4 DONE (EN+pt-BR evaluated — see `docs/PHASE4_RESULTS.md`)**; **v0.1.1 in progress** (Tier A = 57 curated examples fixing TULIP/repetition/over-accommodation found in qualitative probe; retrain pending); **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
 >
 > **✅ Phase 0 baseline (2026-06-09, official judge, no-prompt):** **EN (CEFE.AI headline):** RR mean **0.1467/4** (any-rep **12.7%**, 9th of 28 public models); CB mean **3.6944/7** (deviation **−0.31**, 79.8% neutral). **pt-BR (secondary, not leaderboard-comparable):** RR mean **0.08/4**; CB mean **3.9107/7** (deviation **−0.09**). Judge `deepseek/deepseek-v4-flash` (single, no fallback, `max_tokens=1024`); **0 parse-errors** on all four runs; cost ≈ $1.13 (EN) + ~$1.1 (pt-BR). EN is the comparable reference for the Phase-4 leaderboard claim; pt-BR is the deployment-truth reference for the pt-BR delta.
 
@@ -217,7 +217,7 @@ Cost: **$0.7173** · Model: `qwen/qwen3-8b` · N=1,456 (10 originally skipped, r
 > Pastoral council may restore any excluded author after review.
 
 ### Tier A — Curated High-Quality (manual review)
-**Status:** ⏳ Pending pastoral council
+**Status:** ✅ **v0.1.1: 57 examples** in `data/tier_a/tier_a.jsonl` (16 abstention · 17 distinctives · 24 doctrine), authored + pastoral-reviewed via the offline HTML review tool (`data/tier_a/review_*.html` → `tier_a_reviewed_*.json` → `scripts/build_tier_a.py`). Targets the v0.1 probe defects: TULIP acronym, factual abstention, over-accommodation to heterodox traditions. Decisions: baptism = present both (WCF + 1689); cessationism assumed; amillennial confessional. _(Earlier status: ⏳ pending pastoral council.)_
 
 - Pastoral review mandatory before inclusion (see `docs/PASTORAL_REVIEW_PROTOCOL.md`)
 - Each example reviewed against WCF > Dort > LCF 1689 confessional hierarchy
@@ -354,7 +354,7 @@ scp -P <port> -i ~/.ssh/id_rsa data/merged/eval.jsonl  root@<host>:/workspace/op
 ---
 
 ## Phase 3 — Final Fine-Tuning (Week 2–3)
-**Status:** ✅ **Scripts written** (`05_train_final.py`, `06_export.py`, `configs/final.yaml`) — run pending on A100.
+**Status:** ✅ **DONE (v0.1, 2026-06-12)** — trained on a rented **H100 80GB** (not A100; eager attention per Lesson #7), exp_c config, early-stopped at the optimum → **best `eval_all_loss` 0.6546 @ checkpoint-325** (≈ Phase 2's 0.6527). Merged via `06_export.py --skip-gguf`. ~17 min train, ~$2–3. _(v0.1.1 retrain pending with Tier A added.)_
 
 **Script: `05_train_final.py`** (config: `configs/final.yaml` = exp_c winner)
 - Platform: **A100 80GB** (vast.ai/RunPod, ~$1.80/hr)
@@ -376,7 +376,10 @@ scp -P <port> -i ~/.ssh/id_rsa data/merged/eval.jsonl  root@<host>:/workspace/op
 ---
 
 ## Phase 4 — Evaluation & Publication (Week 3)
-**Status:** ✅ **Script written** (`07_cefeai_eval.py`) — run pending (needs Phase 3 model).
+**Status:** ✅ **DONE (v0.1, 2026-06-12/13)** — both tracks evaluated, comparability lock held (no system prompt, flash judge @1024, same both sides). Headline deltas (full scorecard: `docs/PHASE4_RESULTS.md`):
+- **EN** (leaderboard anchor): RR 0.147→0.227 (Δ+0.08, *n.s.* p=0.15) · CB 3.694→3.499 (**Δ−0.195, p=3.9e-6**); CB Any-Bias 20%→62.7%, neutral 80%→37%.
+- **pt-BR** (product): **RR 0.081→0.617 (Δ+0.537, p=3.7e-6, large effect)** · CB net n.s. but Any-Bias 20%→64.6%, with pro-Protestant directional tilt.
+- Verdict vs plan: **CB confessional goal met/exceeded; RR >60% target missed (best ~21%)**. Publication deferred to v0.1.1 (qualitative probe found defects to fix first).
 
 **Script: `07_cefeai_eval.py`** — local inference (transformers, greedy, `enable_thinking=False`) + OpenRouter judge.
 - **Headline = v1 (no system prompt), default.** `--system-prompt` opts into the v2 deployment-behavior datapoint (not leaderboard-comparable). Compares against the baseline matching its own prompt mode (v1 → the legacy untagged `results/baseline_qwen_qwen3_8b_*` files).
