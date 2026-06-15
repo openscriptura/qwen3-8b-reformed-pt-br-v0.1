@@ -1,5 +1,7 @@
 # OpenScriptura — Implementation Plan
-> Consenso dos 539 PhDs. Última revisão: 2026-06-08. Phase 2 complete; Phase 3/4 scripts written; **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
+> Consenso dos 539 PhDs. Última revisão: 2026-06-15. **Phase 0 baseline DONE (official flash judge)**; Phase 1/2 complete; **Phase 3 DONE (v0.1 trained 2026-06-12, exp_c, ckpt-325) · Phase 4 DONE (EN+pt-BR evaluated — see `docs/PHASE4_RESULTS.md`)**; **v0.1.1 in progress** (Tier A = 57 curated examples fixing TULIP/repetition/over-accommodation found in qualitative probe; retrain pending); **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
+>
+> **✅ Phase 0 baseline (2026-06-09, official judge, no-prompt):** **EN (CEFE.AI headline):** RR mean **0.1467/4** (any-rep **12.7%**, 9th of 28 public models); CB mean **3.6944/7** (deviation **−0.31**, 79.8% neutral). **pt-BR (secondary, not leaderboard-comparable):** RR mean **0.08/4**; CB mean **3.9107/7** (deviation **−0.09**). Judge `deepseek/deepseek-v4-flash` (single, no fallback, `max_tokens=1024`); **0 parse-errors** on all four runs; cost ≈ $1.13 (EN) + ~$1.1 (pt-BR). EN is the comparable reference for the Phase-4 leaderboard claim; pt-BR is the deployment-truth reference for the pt-BR delta.
 
 ---
 
@@ -27,7 +29,10 @@ pair/template/tradition). The 1,606 questions were verified **identical** to ups
 [`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md). So the **internal
 baseline→fine-tuned delta is rigorous**; **absolute** numbers are *protocol-adherent
 but judge-dependent* (not provably identical to their leaderboard until they reply).
-**The baseline must be re-run with the official judge before citing any CEFEAI number.**
+**✅ Done (2026-06-09):** the baseline was re-run with the official judge
+(`deepseek-v4-flash`, no-prompt) — RR mean 0.1467/4, CB mean 3.6944/7, 0 parse-errors.
+The judge model decision (single flash, no cross-model fallback) is recorded in
+`CLAUDE.md` Lesson #18 and `docs/EVALUATION_PROTOCOL.md` §1.
 
 ---
 
@@ -61,6 +66,19 @@ Two fatal problems for using v2 as the headline:
 
 - **v1 baseline (4.7% / 19.6%)** = the reference. Preserved and archived (`results/v1_baseline_archive/`).
 - **v2 (99.3% / 87.8%)** = an interesting "what the deployed assistant does with its production prompt" datapoint, clearly labeled NON-comparable. For CB, high bias is the project's stated intent (explicit confessional bias), not a regression.
+
+## Evaluation — two language tracks (English headline + pt-BR product)
+
+> **Rationale (what each track answers, and why keep both): [`docs/EVALUATION_PROTOCOL.md` §6](docs/EVALUATION_PROTOCOL.md#6-dois-tracks-de-idioma--inglês-âncora-científica--pt-br-verdade-de-produto).** TL;DR: **pt-BR = headline de produto** (mede o uso real); **inglês = âncora científica** (comparável ao leaderboard). Os dois, sem trocar.
+
+The deployed model is **Brazilian Portuguese**, but the CEFE.AI leaderboard is **English**. So we run two tracks (`--lang`), with English as the comparable headline:
+
+| Track | Benchmark | Role | Comparable to leaderboard? |
+|-------|-----------|------|----------------------------|
+| **`en` (headline)** | official English CEFE.AI (150 RR / 1456 CB) | **scientific anchor** — the "vs Grok/GPT/…" claim | ✅ Yes |
+| **`ptbr` (secondary)** | `translate_benchmark.py` → `*_ptbr.jsonl` (only the `prompt` is translated; ids/pair/template/`religion_from`/`religion_to` kept verbatim) | **deployment-realistic** — measures the real pt-BR use | ❌ No (translated = different benchmark) |
+
+Both run baseline + fine-tuned with the same single judge (`deepseek-v4-flash`) and locked settings. The **pt-BR internal delta is rigorous** (same translated inputs + same judge both sides); its **absolute** numbers are not leaderboard-comparable. A pt-BR eval pairs ONLY against the pt-BR baseline. The judge is validated by **κ** (`08_judge_validation.py`, blind labeling) on **both** languages — flash is the weaker tier, so the κ justifies the absolute numbers. The report places the run on the public leaderboard ONLY for `en`; the pt-BR report shows its own per-faith analysis with a non-comparability banner. **Workflow:** `translate_benchmark.py` → `00 --lang ptbr` (baseline) → `07 --lang ptbr` (fine-tuned) → `08 … ptbr` (κ).
 
 ### What we kept from the v2 effort (net-positive even though v2 lost)
 - `scripts/utils/cefeai.py` — shared judge prompts / `wilson_ci` / `baseline_verdict` / `load_system_prompt`; kills drift between `00` and `07`.
@@ -199,7 +217,7 @@ Cost: **$0.7173** · Model: `qwen/qwen3-8b` · N=1,456 (10 originally skipped, r
 > Pastoral council may restore any excluded author after review.
 
 ### Tier A — Curated High-Quality (manual review)
-**Status:** ⏳ Pending pastoral council
+**Status:** ✅ **v0.1.1: 57 examples** in `data/tier_a/tier_a.jsonl` (16 abstention · 17 distinctives · 24 doctrine), authored + pastoral-reviewed via the offline HTML review tool (`data/tier_a/review_*.html` → `tier_a_reviewed_*.json` → `scripts/build_tier_a.py`). Targets the v0.1 probe defects: TULIP acronym, factual abstention, over-accommodation to heterodox traditions. Decisions: baptism = present both (WCF + 1689); cessationism assumed; amillennial confessional. _(Earlier status: ⏳ pending pastoral council.)_
 
 - Pastoral review mandatory before inclusion (see `docs/PASTORAL_REVIEW_PROTOCOL.md`)
 - Each example reviewed against WCF > Dort > LCF 1689 confessional hierarchy
@@ -336,7 +354,7 @@ scp -P <port> -i ~/.ssh/id_rsa data/merged/eval.jsonl  root@<host>:/workspace/op
 ---
 
 ## Phase 3 — Final Fine-Tuning (Week 2–3)
-**Status:** ✅ **Scripts written** (`05_train_final.py`, `06_export.py`, `configs/final.yaml`) — run pending on A100.
+**Status:** ✅ **DONE (v0.1, 2026-06-12)** — trained on a rented **H100 80GB** (not A100; eager attention per Lesson #7), exp_c config, early-stopped at the optimum → **best `eval_all_loss` 0.6546 @ checkpoint-325** (≈ Phase 2's 0.6527). Merged via `06_export.py --skip-gguf`. ~17 min train, ~$2–3. _(v0.1.1 retrain pending with Tier A added.)_
 
 **Script: `05_train_final.py`** (config: `configs/final.yaml` = exp_c winner)
 - Platform: **A100 80GB** (vast.ai/RunPod, ~$1.80/hr)
@@ -358,7 +376,10 @@ scp -P <port> -i ~/.ssh/id_rsa data/merged/eval.jsonl  root@<host>:/workspace/op
 ---
 
 ## Phase 4 — Evaluation & Publication (Week 3)
-**Status:** ✅ **Script written** (`07_cefeai_eval.py`) — run pending (needs Phase 3 model).
+**Status:** ✅ **DONE (v0.1, 2026-06-12/13)** — both tracks evaluated, comparability lock held (no system prompt, flash judge @1024, same both sides). Headline deltas (full scorecard: `docs/PHASE4_RESULTS.md`):
+- **EN** (leaderboard anchor): RR 0.147→0.227 (Δ+0.08, *n.s.* p=0.15) · CB 3.694→3.499 (**Δ−0.195, p=3.9e-6**); CB Any-Bias 20%→62.7%, neutral 80%→37%.
+- **pt-BR** (product): **RR 0.081→0.617 (Δ+0.537, p=3.7e-6, large effect)** · CB net n.s. but Any-Bias 20%→64.6%, with pro-Protestant directional tilt.
+- Verdict vs plan: **CB confessional goal met/exceeded; RR >60% target missed (best ~21%)**. Publication deferred to v0.1.1 (qualitative probe found defects to fix first).
 
 **Script: `07_cefeai_eval.py`** — local inference (transformers, greedy, `enable_thinking=False`) + OpenRouter judge.
 - **Headline = v1 (no system prompt), default.** `--system-prompt` opts into the v2 deployment-behavior datapoint (not leaderboard-comparable). Compares against the baseline matching its own prompt mode (v1 → the legacy untagged `results/baseline_qwen_qwen3_8b_*` files).
@@ -515,6 +536,112 @@ The model does NOT blend traditions — a Reformed model speaks Reformed only.
 | Methodist/Wesleyan | ⏳ v0.5 | Articles of Religion, Wesley's Sermons |
 | Pentecostal | ⏳ v0.6 | AG Statement of Fundamental Truths |
 | Congregationalist | ⏳ v0.7 | Savoy Declaration |
+
+---
+
+## Future Work & Recommendations (out of scope for v0.1 — for v0.2+)
+
+Ideas surfaced during v0.1 that we deliberately **do not** implement now (to keep
+scope tight and the CEFE.AI comparability clean), but that should be revisited next.
+
+### 1. Multi-annotator judge validation (inter-annotator agreement)
+v0.1 validates the judge against **one** human labeler (κ: EN RR 0.80 / CB 0.63;
+pt-BR RR 0.79 / CB 0.98 — `docs/JUDGE_VALIDATION.md`). For stronger,
+publication-grade defensibility of the **absolute** numbers, use **2–3
+theologically-literate annotators** (ideally including a Reformed pastor) on the same
+blind, stratified sample and report:
+- **Native-speaker annotators per language track.** v0.1's single annotator is a
+  native pt-BR speaker; CB EN (κ=0.63) vs CB pt-BR (κ=0.98) shows the gap concentrates
+  on the *tonal* affirmation-vs-encouragement call — exactly the dimension most
+  sensitive to language fluency. A native-English annotator should label the EN track
+  and a native-pt-BR annotator the pt-BR track, so the κ measures judge quality, not
+  the annotator's second-language fluency.
+- **Inter-annotator agreement (IAA = human↔human κ)** — the *ceiling*. The judge's κ
+  must be read against the IAA, not against 1.0 (you cannot expect the judge to agree
+  with humans more than humans agree with each other — especially on the subjective
+  CB "affirmation vs encouragement" boundary we found).
+- **Judge vs the human consensus/majority**, not vs a single labeler.
+Recommended count: **3** (majority vote breaks ties; NLP standard) or **2 +
+adjudication** as the minimum. Reuse `08_judge_validation.py` extended to accept
+multiple label files → IAA + judge-vs-majority. (The **internal delta never needed
+this**; only absolute-number defensibility does.) κ is always re-measurable: a future
+version **re-runs (re-calibrates) the validation** — and MUST re-validate whenever the
+judge model, provider, or rubric changes.
+
+**Panel composition + calibration (the key methodological point).** The κ measures
+agreement with the **CEFE.AI rubric**, NOT with Reformed theology — so annotators
+must label by the *thin* rubric (explicit religion / directional bias as CEFE.AI
+defines it), setting aside their own confession. Risks and design:
+- **An all-Reformed panel shares a systematic "thick" deviation** (e.g. scoring a
+  gender-ideology answer as 4 "religious" — the q0019 case — when the thin rubric
+  makes it 0). Three same-confession raters would then *agree with each other* (high
+  IAA) but *all* disagree with the thin judge the same way → κ looks low as if the
+  *judge* were wrong, when it is the *annotators* applying their theology. And with
+  majority vote, 2-of-3 same-confession can dominate and encode that bias.
+- **A mixed panel mitigates this and adds credibility.** A proposed good mix: **2
+  Protestants + 1 religious-studies scholar** (e.g. Catholic, with cross-tradition
+  expertise — Buddhism/Shinto/Christianity). The scholar brings (a) a *descriptive,
+  non-advocacy* lens that matches the rubric's intent, and (b) coverage of the
+  non-Christian traditions in the CB benchmark (14 faiths) the Protestants may know
+  less. A non-Reformed, neutral-expertise rater also blinds the validation against the
+  "insiders judging themselves" critique a reviewer would raise. Treat the scholar's
+  labels as the rubric-fidelity anchor.
+- **Mandatory calibration round (non-blind) BEFORE independent labeling:** the raters
+  label ~5–10 items together and align on the rubric's definitions — especially the
+  *thin* religion definition and the *affirmation-vs-encouragement* CB boundary — so
+  confession does not leak into the labels. Then label independently and **blind**.
+  If well-calibrated to the external rubric, each rater's personal confession should
+  barely affect the labels. Report IAA: a Protestant↔scholar divergence is itself the
+  "confessional vs descriptive" signal.
+
+### 2. "Thick-religion" / idolatry-detection eval (OpenScriptura-specific Tier-2)
+CEFE.AI measures **explicit** religious representation (mentions of God / faith /
+practice / leaders) — a *thin* definition we MUST keep for leaderboard comparability.
+But from a Reformed/Augustinian lens all of life is religious: modern ideologies
+(wokism, Marxism, scientism, nationalism, consumerism…) are **functional religions /
+idolatries** with their own soteriology and orthodoxy. A response that frames an issue
+through such an ideology is, theologically, religious — yet scores **0** on CEFE.AI's
+thin RR (correctly, by their rubric).
+
+Future, **project-specific, NOT-leaderboard-comparable** benchmark: does the model
+**recognize modern ideologies as functional religion/idolatry, name them, and point to
+Christ** (confessional discernment)? This is arguably the **distinctive contribution**
+of a Reformed model — secular models are blind to ideological idolatry; a confessional
+one should not be. Build it as a separate eval (its own prompt set + judge rubric),
+clearly labeled as a *thick-religion* metric distinct from the *thin* CEFE.AI one. Do
+NOT fold it into the CEFE.AI κ or rubric (that would break the HARD RULE).
+
+### 3. Judge ensemble / panel (3 judges, different model families)
+The strongest mitigation for **judge-model training bias** (a single model's lean —
+e.g. DeepSeek's "both-sides/neutral" tendency that read affirming CB answers as
+neutral): score each item with **3 judges from different families** (e.g. DeepSeek +
+a Claude + a GPT tier), same vendored prompt, and aggregate.
+- **Aggregation = MEDIAN of the 3, not "two-equal majority".** On the fine ordinal
+  scales (RR 0–4, CB 1–7) exact ties are uncommon, so a "discard the odd one / else
+  escalate to 5" rule fires constantly and may never converge on a genuinely
+  ambiguous item. The median auto-discards the outlier, always converges, and
+  respects ordinality. (NB: this is *bias/representation* scoring, not *quality* — so
+  it is median/majority, **not** "take the two best, drop the worst", which is a
+  quality-scoring rule.) Treat a large **spread** across the 3 as a "high
+  disagreement / ambiguous item" signal rather than escalating.
+- **Comparability tradeoff (important):** an ensemble is fine for the **internal
+  delta** (use the *same* ensemble on both sides — the bias cancels and the delta is
+  *more* robust). But CEFE.AI used a **single** judge, so a 3-judge ensemble moves our
+  **absolute** numbers further from their methodology. A single judge stays "closer to
+  what CEFE.AI did"; the ensemble is more robust but a different process. Keep the
+  single-judge run in parallel if both robustness and leaderboard-proximity matter.
+- **Cheap first step (do before a full ensemble):** run the 3 judges on **only the
+  ~50-item κ sample** (not all 1,606). This decisively answers "does flash alone agree
+  with the ensemble? does the ensemble agree with the human better than flash?" at
+  negligible cost — a strong cross-check of the single-judge choice before committing
+  to 3× the judge spend on the whole benchmark. (Idea validated with the user, who has
+  used 3-LLM judging on a prior translation-scoring project.)
+
+### 4. Smaller, cheaper hardening (any version)
+- Larger κ sample (n≈100) for a tighter confidence interval if a borderline κ (CB 0.63)
+  needs to be defended more strongly.
+- Escalate the judge to `deepseek-v4-pro` + a pinned non-reasoning provider if the
+  flash absolute numbers ever prove insufficiently defensible (Lesson #18).
 
 ---
 

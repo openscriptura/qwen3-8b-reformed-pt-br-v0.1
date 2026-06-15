@@ -17,16 +17,18 @@ baseline and the fine-tuned model — only the weights differ.
 
 | Parameter | Decision | Why |
 |-----------|----------|-----|
-| Model class | **A strong, frontier-class model** — not a small/"flash" tier | Judge quality is the single biggest driver of score validity; a weak judge mis-scores the rubric. |
+| Model class | Prefer a strong, frontier-class judge — BUT **reliability is a hard gate**: a heavy-reasoning model that overflows the token budget is unusable as a judge. | Judge quality drives validity, but a judge that returns `content: null` on a non-random subset is worse than a slightly weaker reliable one (the failures are content-correlated → bias the surviving sample). |
 | Family | **NOT Qwen** (the model under test is Qwen3-8B) | Avoids self-preference / family bias (a model tends to favor its own outputs). |
-| Pinning | **Pin an exact dated snapshot** (no floating "latest" alias) | Reproducibility — a silently-updated judge changes the numbers. |
-| Concrete default | Upgrade `OPENROUTER_MODEL_JUDGE` from `deepseek-v4-flash` → a strong non-Qwen judge (e.g. `deepseek/deepseek-v4` full, or a frontier Claude/GPT tier), pinned. | Flash is too weak to be a defensible judge; the exact pick is a budget call but must meet the criteria above. |
+| Pinning | **Pin an exact dated snapshot** (no floating "latest" alias) | Reproducibility — a silently-updated judge changes the numbers. OpenRouter returns the resolved snapshot id (e.g. `deepseek/deepseek-v4-flash-20260423`), recorded per result. |
+| Concrete choice (v0.1) | **`deepseek/deepseek-v4-flash`** as the SINGLE judge, both sides, `max_tokens=1024`, **no cross-model fallback**. | **By evidence (2026-06-09):** across past CB runs `deepseek-v4-pro` ran as a heavy reasoning model and overflowed (28% null-content; reasoning ≤**1178** tok, so even 1024 is unsafe), while `flash` reasons ≤842 tok → ~0% errors at 1024. Flash is the weaker tier, so its absolute numbers are gated on the κ check below. **Escalation if κ fails:** `deepseek-v4-pro` + pin a non-reasoning provider (DeepInfra/DigitalOcean/Together/Alibaba showed 0% overflow) — never a per-call model fallback. |
 | Same judge both sides | **Mandatory** | The absolute number is judge-dependent; holding the judge constant makes the **delta** valid. |
-| Validation (M9) | **Before trusting numbers:** human-label a ~50-item sample and report judge↔human agreement with **quadratic-weighted Cohen's κ** (ordinal scale). | Justifies the judge empirically; flags a miscalibrated judge. Also inspect per-tradition judge behavior (CB) for judge bias. |
+| Validation (M9) | **Gates the absolute numbers when using flash:** human-label a ~50-item sample and report judge↔human agreement with **quadratic-weighted Cohen's κ** (ordinal scale); require ~substantial agreement (κ ≳ 0.6) before citing absolutes. **Results + analysis: [`docs/JUDGE_VALIDATION.md`](JUDGE_VALIDATION.md)** (EN: RR κ=0.80, CB κ=0.63; pt-BR: RR κ=0.79, CB κ=0.98 — all four pass). | Justifies the weaker judge empirically; flags a miscalibrated judge. Also inspect per-tradition judge behavior (CB) for judge bias. |
 
 > **Honesty caveat:** because CEFE.AI does not publish *their* judge, our absolute
 > numbers are **protocol-adherent but judge-dependent** — not provably identical to
-> their leaderboard. The rigorous claim is the internal delta. (See `configs/cefeai/README.md`.)
+> their leaderboard, and v0.1 uses the lighter `flash` tier (reliability-driven,
+> κ-gated). The rigorous claim is the internal delta (same judge both sides). (See
+> `configs/cefeai/README.md`.)
 
 ## 2. Inference settings — model under test
 
@@ -44,8 +46,8 @@ baseline and the fine-tuned model — only the weights differ.
 | Parameter | Decision | Why |
 |-----------|----------|-----|
 | Judge `temperature` | **0.0** | Deterministic verdicts. |
-| Judge `max_tokens` | **256** | RR verdict is a one-sentence JSON; CB is `Rating: <d>` — 256 is ample. |
-| Judge `enable_thinking` | **False** | The task is a simple rubric classification; thinking adds nondeterminism and risks truncating the verdict inside a `<think>` block. (Parser still strips stray `<think>` defensively.) |
+| Judge `max_tokens` | **1024** | DeepSeek-v4 runs as a reasoning model on some OpenRouter providers; reasoning tokens count against `max_tokens`, and at 256 the judge consumed all tokens mid-reasoning → `content: null` parse errors. 1024 is safe for the chosen `flash` judge (max reasoning observed **842** tok < 1024 → ~0% null) but NOT for `pro` (observed up to **1178** tok); that gap is the empirical reason §1 selects flash. Covers the reasoning + the 5-token verdict (`Rating: N` / short JSON); cost is nearly identical (billed on tokens used, not the cap). **Locked on BOTH scripts** (comparability). |
+| Judge `enable_thinking` | **False** | Prevents Qwen3-family thinking blocks from truncating the verdict. DeepSeek ignores this Qwen-specific flag (it reasons regardless of it); the token budget above + the lighter-reasoning flash tier handle that. The parser strips stray `<think>` blocks defensively. |
 | Judge calls per response | **1** (no majority vote for v0.1) | Simplicity; ensemble/panel is a future enhancement. |
 | **Invalid / unparseable judge output** | **Exclude from metrics; never coerce to a default score.** Record `n_parse_error` and the rate; if the rate is non-trivial (>~2%), fix the judge/prompt — do not silently impute. | Coercing a parse error to 0 (RR) or 4 (CB) biases the aggregate. A deterministic (temp 0) retry would reproduce the same bad output, so we exclude rather than retry. |
 | Determinism | temp 0 on both model and judge · fixed seeds · single sample · **pinned snapshots** (judge + base model) · all settings recorded in the summary JSON. | Full reproducibility. |
@@ -59,6 +61,23 @@ baseline and the fine-tuned model — only the weights differ.
 
 ## 5. What this changes in code (already applied)
 - `scripts/utils/cefeai.py`: `mean_ci()` + `mean_score_ci`/`mean_rating_ci` in `summarize`; per-pair/template/tradition CB slices; official CB regex.
-- `scripts/00_cefeai_baseline.py` & `07_cefeai_eval.py`: model `max_tokens=1024`; judge `enable_thinking=False`, `max_tokens=256`.
+- `scripts/00_cefeai_baseline.py` & `07_cefeai_eval.py`: model `max_tokens=1024`; judge `enable_thinking=False`, `max_tokens=1024` (raised from 256 — see §3 above).
 - `.env.example`: judge-model guidance (strong, non-Qwen, pinned).
 - Still TODO (analysis steps, not blockers): the paired significance test at comparison time, and the κ judge-validation sample.
+
+## 6. Dois tracks de idioma — inglês (âncora científica) + pt-BR (verdade de produto)
+
+**Decisão (2026-06-09, com o usuário): fazer os dois, com ênfases diferentes — porque respondem a perguntas diferentes.** Implementado via `--lang {en,ptbr}` (ver `00`/`07`/`translate_benchmark.py`).
+
+| Track | Pergunta que responde | Papel |
+|-------|-----------------------|-------|
+| **Inglês (CEFE.AI oficial)** | "Isso é uma contribuição científica vs o estado da arte (Grok, GPT-5, etc.)?" | **Âncora científica** — comparável ao leaderboard, é o número que o mundo verifica (paper/arXiv, credibilidade). |
+| **Português (traduzido)** | "Isso é bom para o meu usuário real (brasileiro, reformado, em português)?" | **Verdade de produto** — mede exatamente o objetivo de deploy. |
+
+**Para o objetivo do projeto, o track pt-BR é o que de fato importa.** Ele mede o cenário real (pergunta PT → resposta PT reformada). É o número que vai no **model card** e que justifica o produto.
+
+**Mas não largar o inglês** — ele é barato (~$1,13) e é a **única** forma de dizer "subimos a representação CEFE.AI em N pontos" de modo comparável ao leaderboard público. Sem ele, perde-se a credibilidade científica.
+
+**Caveat técnico a observar na Phase 4:** o modelo fine-tuned provavelmente vai responder **em português mesmo às perguntas em inglês** (porque foi treinado pt-BR). No track inglês isso é **OK** — o juiz mede *representação religiosa*, não idioma — mas é mais um motivo pelo qual o **track pt-BR é o mais natural e fiel** ao que se quer.
+
+**Resumo:** **pt-BR = headline de produto** (o que se quer); **inglês = âncora científica** (o que torna verificável). **Os dois, sem trocar um pelo outro.** O delta interno é rigoroso nos dois (mesmo juiz/settings em ambos os lados); só os **absolutos** do pt-BR não são leaderboard-comparable (benchmark traduzido = benchmark diferente). κ valida o juiz **nos dois idiomas**.

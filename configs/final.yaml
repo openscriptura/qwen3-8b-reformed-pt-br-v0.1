@@ -22,8 +22,8 @@ experiment:
 model:
   name: "Qwen/Qwen3-8B"
   dtype: "bfloat16"
-  attn_implementation: "flash_attention_2"   # install: pip install flash-attn --no-build-isolation
-  # fallback: set to "eager" if flash-attn is not installed
+  attn_implementation: "eager"   # Lesson #7: flash-attn build is the #1 time-sink/failure; eager = identical weights, ~10-15% slower
+  # to re-enable: "flash_attention_2" (requires: pip install flash-attn --no-build-isolation)
 
 quantization:
   enabled: false   # Full bf16 on A100 — no 4-bit needed. Set true to revert to QLoRA.

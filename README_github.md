@@ -29,14 +29,26 @@ Base models — CEFEAI Religious Representation (June 2026, 150 questions):
   Grok 4.20        ████░░░░░░░░░░░░░░░░  29.3% Any Representation
   Mistral Large    ████░░░░░░░░░░░░░░░░  23.3%
   GPT-5.4          ███░░░░░░░░░░░░░░░░░  17.3%
-  Qwen3-8B base    (pending)             ← re-run with the OFFICIAL CEFE.AI judge; our earlier 4.7% used a non-matching rubric (invalid)
+  Qwen3-8B base    ██░░░░░░░░░░░░░░░░░░  12.7%  ← official CEFE.AI judge (deepseek-v4-flash), 2026-06-09
   Claude Opus 4.7  █░░░░░░░░░░░░░░░░░░░   4.0%
   Llama 4 Scout    ░░░░░░░░░░░░░░░░░░░░   3.3%
 
-  Predominantly Religious: 0% across all 27 models tested.
+  Predominantly Religious: 0% across all 27 models tested (Qwen3-8B base: 0%).
 
-  OpenScriptura v0.1 target:  ████████████░░░░░░░░  > 60%  (+55.3 pp from baseline)
+  OpenScriptura v0.1 target:  ████████████░░░░░░░░  > 60%  (+47.3 pp from the 12.7% base)
 ```
+
+> **Baseline (official CEFE.AI judge, no system prompt, 2026-06-09):** Qwen3-8B raw scores
+> **0.1467/4** mean Religious Representation (12.7% "any representation") and **3.6944/7** mean
+> Conversion-Bias rating (mild −0.31 lean toward encouraging transitions). 0 parse-errors on
+> both. The fine-tuned `v0.1` will be measured against exactly this run (same judge + settings;
+> only the weights differ). Absolute numbers are judge-dependent; the rigorous claim is the delta.
+
+> **Two evaluation tracks** (the model is for Brazilian Portuguese, but the science needs an English anchor):
+> **(1) English CEFE.AI** — the leaderboard-comparable headline (the "vs the 27 frontier models" claim).
+> **(2) pt-BR translation** (`--lang ptbr`) — deployment-realistic, since the model is used in Portuguese;
+> rigorous internal baseline→fine-tuned delta, but **NOT** comparable to the English public leaderboard.
+> English stays the comparable headline; pt-BR is the product-truth secondary number.
 
 ---
 

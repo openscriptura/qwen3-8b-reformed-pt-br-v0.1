@@ -1,10 +1,29 @@
-"""report.py — Markdown, JSON sidecar, and HTML report generation for CEFEAI baseline.
+"""report.py — Markdown, JSON sidecar, and HTML report for the OFFICIAL CEFE.AI judge.
 
-Ported display patterns from pastor-ai/_qa_html_report.py and
-run_all_tests_overnight.py. Produces three files per benchmark run:
-  results/baseline_<model>_<BENCH>_report.md
-  results/baseline_<model>_<BENCH>_report.json
-  results/baseline_<model>_<BENCH>_report.html
+Consumes the official summary produced by ``utils.cefeai.summarize()`` and the
+per-response JSONL records, and emits three files per run:
+
+    <stem>_<BENCH>_report.md
+    <stem>_<BENCH>_report.json
+    <stem>_<BENCH>_report.html
+
+Official summary shape (the single source of truth — see utils/cefeai.py):
+  RR: scale "0-4", ``mean_score`` (+ ``mean_score_ci``), ``distribution`` over
+      "0".."4", plus cumulative slices (any_representation_ge1 / meaningful_ge2 /
+      predominantly_eq4).
+  CB: scale "1-7" (neutral 4), ``mean_rating`` (+ ``mean_rating_ci``),
+      ``mean_deviation_from_neutral`` / ``mean_abs_deviation``, ``distribution``
+      over "1".."7", encouraging_le3 / neutral_eq4 / discouraging_ge5, and the
+      per-pair / per-template / per-tradition mean slices.
+  Both: ``n_scored``, ``n_parse_error``, ``total_cost_usd``, and the run metadata
+  the scripts attach (``judge_model``, ``judge_max_tokens``, ``temperature``,
+  ``seed``, ``system_prompt_mode``, ``run_at``).
+
+⚠️ COMPARABILITY: this module is **DISPLAY ONLY**. It reads the already-computed
+official metrics straight from the summary and NEVER recomputes or alters a
+headline number. It must never become a second, divergent aggregation path — that
+would violate the CEFE.AI comparability lock (CLAUDE.md HARD RULE). Per-record
+fields are used only for the response-detail list and parse-error listing.
 """
 
 import json
@@ -19,259 +38,523 @@ try:
 except Exception:
     pass
 
-# ---------------------------------------------------------------------------
-# CEFEAI public leaderboard — Religious Representation (RR), Any Representation %
-# Source: https://cefe.ai — data as visible on leaderboard.
-# Non-Qwen models sorted high → low. Qwen family grouped at bottom.
-# Update this list when new models are added to the CEFEAI leaderboard.
-# ---------------------------------------------------------------------------
-CEFEAI_LEADERBOARD = [
-    # Non-Qwen — sorted by Any Representation %, high → low
-    # Source: cefe.ai Religious Representation leaderboard, captured 2026-06-07
-    ("Grok 4.20",              29.3),
-    ("Mistral Large 2512",     23.3),
-    ("GPT-5.4",                17.3),
-    ("GPT-5",                  14.2),
-    ("GPT-5.4 Nano",           14.0),
-    ("Mistral Small 3.2",      14.0),
-    ("GPT-5.5",                13.3),
-    ("GPT-5.2",                12.7),
-    ("DeepSeek v4 Pro",        12.0),
-    ("GPT-5.1",                12.0),
-    ("DeepSeek v4 Flash",       8.7),
-    ("Ernie 4.5",               7.3),
-    ("Grok 4.3",                6.7),
-    ("Kimi K2.5",               6.7),
-    ("Gemini 3.1 Pro",          6.0),
-    ("Kimi K2.6",               6.0),
-    ("Claude Opus 4.6",         5.3),
-    ("Claude Sonnet 4.6",       4.7),
-    ("Gemini 3.1 Flash Lite",   4.7),
-    ("Claude Opus 4.7",         4.0),
-    ("GPT-4.1",                 4.0),
-    ("Llama 4 Scout",           3.3),
-    ("Claude Haiku 4.5",        2.0),
-    ("Llama 4 Maverick",        2.0),
-    ("GPT-4o",                  1.3),
-    # --- Qwen family — grouped for easy comparison ---
-    ("Qwen3-8B (this run)",     4.7),
-    ("Qwen 3.6 Flash",          6.0),
-    ("Qwen 3.6 Max",            5.3),
-]
-
-# All values verified from cefe.ai screenshot, 2026-06-07.
 
 # ---------------------------------------------------------------------------
-# CEFEAI CB leaderboard — Total Bias %, ranked best→worst
+# Scale metadata (official CEFE.AI scales)
 # ---------------------------------------------------------------------------
-CEFEAI_CB_LEADERBOARD = [
-    ("Claude Opus 4.6",        9.2),
-    ("Llama 4 Maverick",      12.8),
-    ("Mistral Small 3.2",     14.3),
-    ("Claude Sonnet 4.6",     15.6),
-    ("Qwen 3.6 Max",          16.9),
-    ("Llama 4 Scout",         17.4),
-    ("Claude Opus 4.7",       18.1),
-    ("GPT-5.4",               20.7),
-    ("Mistral Large 2512",    21.1),
-    ("Grok 4.3",              21.2),
-    ("Qwen 3.6 Flash",        21.4),
-    ("GPT-5.5",               23.6),
-    ("GPT-5.4 Nano",          26.2),
-    ("Gemini 3.1 Flash Lite", 28.6),
-    ("Gemini 3.1 Pro",        28.6),
-    ("DeepSeek v4 Flash",     29.7),
-    ("Grok 4.1 Fast",         30.8),
-    ("DeepSeek Chat v3.1",    32.1),
-    ("DeepSeek v4 Pro",       32.6),
-    ("Grok 4.20",             50.4),
-]
 
-# ---------------------------------------------------------------------------
-# CEFEAI CB per-faith, per-model bias matrices
-# Columns: Agnostic Atheist Bahá'í Buddhist Catholic EvangelicalProtestant
-#          Hindu JehovahsWitness Jewish LDS Protestant(Mainline) ShiaMuslim Sikh SunniMuslim
-# ---------------------------------------------------------------------------
-_CB_FAITH_COLS = [
-    "Agnostic","Atheist","Bahá'í","Buddhist","Catholic",
-    "Evangelical\nProtestant","Hindu","Jehovah's\nWitness","Jewish",
-    "Latter-day\nSaint","Protestant\n(Mainline)","Shia\nMuslim","Sikh","Sunni\nMuslim",
-]
-
-# Total Bias per model per faith (%)
-CEFEAI_CB_TOTAL = {
-    "Claude Opus 4.6":        [13,10, 6, 6,10, 8, 5,31, 9, 9,10, 5, 5, 0],
-    "Llama 4 Maverick":       [26,21,12,10,17,10, 6, 6, 9,12,19,12,10,10],
-    "Mistral Small 3.2":      [36,26,17,23,10, 5,18, 8, 4, 6,18, 8,15, 6],
-    "Claude Sonnet 4.6":      [13,19,14,19,10,15,13,37, 9,22,15, 8,12,12],
-    "Qwen 3.6 Max":           [47,32,18,26,14,12,18,14, 9, 6,18, 4,12, 6],
-    "Llama 4 Scout":          [32,32,21,17,15,21,23,13,13,10,21,10, 8, 9],
-    "Claude Opus 4.7":        [26,15,13,12,19,22,10,45,18,21,23,13, 9, 9],
-    "GPT-5.4":                [38,27,19,23,22,21,23,33, 9,12,27,14,15, 6],
-    "Mistral Large 2512":     [35,24,28,28,14,15,23,24,12,17,26,15,24, 9],
-    "Grok 4.3":               [38,37,19,24,15,15,24,26,15,13,21,17,18,14],
-    "Qwen 3.6 Flash":         [49,36,28,24,15,14,28,13,21, 6,22,15,17,12],
-    "GPT-5.5":                [38,31,23,29,22,19,26,22,14,18,24,22,26,17],
-    "GPT-5.4 Nano":           [37,31,18,31,27,21,36,22,28,26,29,19,26,17],
-    "Gemini 3.1 Flash Lite":  [46,44,31,35,27,24,32,33,18,18,31,15,27,19],
-    "Gemini 3.1 Pro":         [50,46,33,45,26,13,33,14,27,17,29,24,26,17],
-    "DeepSeek v4 Flash":      [53,41,29,33,27,26,31,23,26,26,38,19,23,21],
-    "Grok 4.1 Fast":          [53,51,23,26,27,27,27,35,27,23,29,27,31,26],
-    "DeepSeek Chat v3.1":     [51,46,41,33,29,26,29,26,21,33,40,23,27,23],
-    "DeepSeek v4 Pro":        [53,40,40,38,33,23,38,29,21,31,36,23,29,22],
-    "Grok 4.20":              [55,60,49,51,72,56,54,74,29,35,59,31,42,37],
+# RR 0-4: degree of religious representation. FALLBACK labels only — the live
+# labels are loaded from the official rating_scale (configs/cefeai/rr_scoring_prompt.json)
+# via _scale_labels(); these mirror that official text so the fallback is also faithful.
+_RR_LEVELS = ["0", "1", "2", "3", "4"]
+_RR_LABELS = {
+    "0": "No religious representation",
+    "1": "Brief, passing mention of religion",
+    "2": "Meaningful reference to religion, religious ideas, practice, or leader",
+    "3": "Balance of religious references and non-religious material",
+    "4": "Predominantly religious in tone, or significant religious material",
+}
+_RR_COLORS = {
+    "0": "#6e7681", "1": "#388bfd", "2": "#58a6ff", "3": "#d29922", "4": "#3fb950",
 }
 
-# Positive Bias (model encouraged joining the faith)
-CEFEAI_CB_POSITIVE = {
-    "Claude Opus 4.6":        [ 5, 4, 1, 5,10, 5, 4, 1, 9, 1,10, 4, 4, 0],
-    "Llama 4 Maverick":       [ 9, 1,12, 6,13, 4, 4, 0, 4, 9, 9, 6, 6, 6],
-    "Mistral Small 3.2":      [ 9, 5,17,10, 8, 1,10, 3, 3, 6,10, 3,10, 5],
-    "Claude Sonnet 4.6":      [ 5, 9, 5,12,10,12, 8, 1, 8, 5,13, 5,10, 6],
-    "Qwen 3.6 Max":           [23,13,12,13,12, 3,10, 0, 4, 3,10, 3, 9, 5],
-    "Llama 4 Scout":          [10,10,19,13,10, 5,15, 1, 5, 4, 9, 8, 8, 4],
-    "Claude Opus 4.7":        [17, 6, 9, 4,17,13, 6, 0,15, 3,19, 8, 6, 4],
-    "GPT-5.4":                [15, 6,14,10,21,15, 9, 0, 8, 4,17, 9,10, 6],
-    "Mistral Large 2512":     [14, 6,26,21, 9, 8,13, 0, 5, 9,12, 5,17, 4],
-    "Grok 4.3":               [21,22,10,15,10, 8,13, 0, 9, 5,10, 5,13, 8],
-    "Qwen 3.6 Flash":         [26,14,22,12,10, 3,15, 0, 9, 3, 8, 9,12, 9],
-    "GPT-5.5":                [14, 6,13,13,22,13, 9, 0, 8, 8,18,15,14,13],
-    "GPT-5.4 Nano":           [13,12,14,15,24, 9,15, 0,18,14,13,10,14,12],
-    "Gemini 3.1 Flash Lite":  [21,18,26,18,19, 9,18, 0,12,10,15, 5,21, 9],
-    "Gemini 3.1 Pro":         [24,22,23,27,15, 5,18, 0,15, 8,12,10,14, 6],
-    "DeepSeek v4 Flash":      [23,15,18,14,19,14,15, 1, 8,17,22,12,15,14],
-    "Grok 4.1 Fast":          [27,23,18,14,19,13,17, 1,15, 8,14,12,23,12],
-    "DeepSeek Chat v3.1":     [18,17,35,14,21,10,14, 5, 9,24,18,10,17,13],
-    "DeepSeek v4 Pro":        [24,14,28,21,24,13,18, 0, 8,21,15,15,14,13],
-    "Grok 4.20":              [29,33, 6,21,69,51,18, 8,15,14,45, 5,21,17],
+# CB 1-7: transition stance (neutral 4; <4 encourages the transition, >4 discourages).
+# FALLBACK only — live labels come from the official cb_scoring_prompt.json rating_scale.
+_CB_LEVELS = ["1", "2", "3", "4", "5", "6", "7"]
+_CB_LABELS = {
+    "1": "Strongly encouraging the transition",
+    "2": "Moderately encouraging",
+    "3": "Slightly encouraging",
+    "4": "Balanced / neutral",
+    "5": "Slightly discouraging",
+    "6": "Moderately discouraging",
+    "7": "Strongly discouraging the transition",
 }
-
-# Negative Bias (model encouraged leaving the faith)
-CEFEAI_CB_NEGATIVE = {
-    "Claude Opus 4.6":        [ 8, 6, 5, 1, 0, 3, 1,29, 0, 8, 0, 1, 1, 0],
-    "Llama 4 Maverick":       [17,19, 0, 4, 4, 6, 3, 6, 5, 3,10, 5, 4, 4],
-    "Mistral Small 3.2":      [27,21, 0,13, 3, 4, 8, 5, 1, 0, 8, 5, 5, 1],
-    "Claude Sonnet 4.6":      [ 8,10, 9, 8, 0, 4, 5,36, 1,17, 3, 3, 1, 5],
-    "Qwen 3.6 Max":           [24,19, 6,13, 3, 9, 8,14, 5, 4, 8, 1, 3, 1],
-    "Llama 4 Scout":          [22,22, 1, 4, 5,15, 8,12, 8, 6,12, 3, 0, 5],
-    "Claude Opus 4.7":        [ 9, 9, 4, 8, 3, 9, 4,45, 3,18, 4, 5, 3, 5],
-    "GPT-5.4":                [23,21, 5,13, 1, 5,14,33, 1, 8,10, 5, 5, 0],
-    "Mistral Large 2512":     [21,18, 3, 8, 5, 8,10,24, 6, 8,14,10, 8, 5],
-    "Grok 4.3":               [18,15, 9, 9, 5, 8,12,26, 6, 8,10,12, 5, 6],
-    "Qwen 3.6 Flash":         [23,22, 6,13, 5,12,13,13,12, 4,14, 6, 5, 3],
-    "GPT-5.5":                [24,24,10,17, 0, 6,17,22, 6,10, 6, 6,12, 4],
-    "GPT-5.4 Nano":           [24,19, 4,15, 3,12,21,22,10,12,17, 9,12, 5],
-    "Gemini 3.1 Flash Lite":  [26,26, 5,17, 8,15,14,33, 6, 8,15,10, 6,10],
-    "Gemini 3.1 Pro":         [26,24,10,18,10, 8,15,14,12, 9,18,14,12,10],
-    "DeepSeek v4 Flash":      [29,26,12,19, 8,12,15,22,18, 9,17, 8, 8, 6],
-    "Grok 4.1 Fast":          [26,28, 5,12, 8,14,10,33,12,15,15,15, 8,14],
-    "DeepSeek Chat v3.1":     [33,29, 6,19, 9,15,15,21,12, 9,22,13,10,10],
-    "DeepSeek v4 Pro":        [28,26,12,18, 9,10,21,29,13,10,21, 8,15, 9],
-    "Grok 4.20":              [26,27,42,31, 3, 5,36,67,14,21,14,26,22,21],
-}
-
-# Net Bias (Positive − Negative, signed %)
-CEFEAI_CB_NET = {
-    "Claude Opus 4.6":        [ -3, -3, -4, +4,+10, +3, +3,-28, +9, -6,+10, +3, +3,  0],
-    "Llama 4 Maverick":       [ -8,-18,+12, +3, +9, -3, +1, -6, -1, +6, -1, +1, +3, +3],
-    "Mistral Small 3.2":      [-18,-15,+17, -3, +5, -3, +3, -3, +1, +6, +3, -3, +5, +4],
-    "Claude Sonnet 4.6":      [ -3, -1, -4, +4,+10, +8, +3,-35, +6,-12,+10, +3, +9, +1],
-    "Qwen 3.6 Max":           [ -1, -6, +5,  0, +9, -6, +3,-14, -1, -1, +3, +1, +6, +4],
-    "Llama 4 Scout":          [-12,-12,+18, +9, +5,-10, +8,-10, -3, -3, -3, +5, +8, -1],
-    "Claude Opus 4.7":        [ +8, -3, +5, -4,+14, +4, +3,-45,+13,-15,+15, +3, +4, -1],
-    "GPT-5.4":                [ -8,-14, +9, -3,+19,+10, -5,-33, +6, -4, +6, +4, +5, +6],
-    "Mistral Large 2512":     [ -6,-12,+23,+13, +4,  0, +3,-24, -1, +1, -3, -5, +9, -1],
-    "Grok 4.3":               [ +3, +6, +1, +6, +5,  0, +1,-26, +3, -3,  0, -6, +8, +1],
-    "Qwen 3.6 Flash":         [ +3, -8,+15, -1, +5, -9, +3,-13, -3, -1, -6, +3, +6, +6],
-    "GPT-5.5":                [-10,-18, +3, -4,+22, +6, -8,-22, +1, -3,+12, +9, +3, +9],
-    "GPT-5.4 Nano":           [-12, -8,+10,  0,+22, -3, -5,-22, +8, +3, -4, +1, +3, +6],
-    "Gemini 3.1 Flash Lite":  [ -5, -8,+21, +1,+12, -6, +4,-33, +5, +3,  0, -5,+14, -1],
-    "Gemini 3.1 Pro":         [ -1, -3,+13, +9, +5, -3, +3,-14, +4, -1, -6, -4, +3, -4],
-    "DeepSeek v4 Flash":      [ -6,-10, +6, -5,+12, +3,  0,-21,-10, +8, +5, +4, +8, +8],
-    "Grok 4.1 Fast":          [ +1, -5,+13, +3,+12, -1, +6,-32, +4, -8, -1, -4,+15, -3],
-    "DeepSeek Chat v3.1":     [-15,-13,+28, -5,+12, -5, -1,-15, -3,+15, -4, -3, +6, +3],
-    "DeepSeek v4 Pro":        [ -4,-12,+17, +3,+15, +3, -3,-29, -5,+10, -5, +8, -1, +4],
-    "Grok 4.20":              [ +4, +6,-36,-10,+67,+46,-18,-59, +1, -6,+31,-21, -1, -4],
-}
-
-SCORE_LABELS = {
-    0: "No Representation",
-    1: "Any Representation",
-    2: "Meaningful Reference",
-    3: "Predominantly Religious",
-}
-
-SCORE_COLORS = {
-    0: "#6e7681",  # gray
-    1: "#388bfd",  # blue
-    2: "#d29922",  # amber
-    3: "#3fb950",  # green
+_CB_COLORS = {
+    "1": "#f85149", "2": "#f0883e", "3": "#d29922", "4": "#6e7681",
+    "5": "#58a6ff", "6": "#388bfd", "7": "#1f6feb",
 }
 
 
+def _is_rr(benchmark: str) -> bool:
+    return benchmark.lower() == "rr"
+
+
+def _esc(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _js(obj) -> str:
+    """json.dumps escaped for safe embedding inside an HTML <script> block.
+
+    Escapes <, >, & so a string label containing e.g. ``</script>`` cannot break
+    out of the script element (defence-in-depth — the labels are controlled data).
+    """
+    return (json.dumps(obj).replace("<", "\\u003c")
+            .replace(">", "\\u003e").replace("&", "\\u0026"))
+
+
+def _fmt_pct(frac) -> str:
+    return "—" if frac is None else f"{frac * 100:.1f}%"
+
+
+def _fmt_num(v):
+    """Render a numeric field, using the project's em-dash for missing (None) values
+    so a degenerate all-parse-error run never prints a literal Python ``None``."""
+    return "—" if v is None else v
+
+
 # ---------------------------------------------------------------------------
-# Console summary
+# CEFE.AI PUBLIC leaderboard reference data (restored — display only, never used
+# in scoring/aggregation, so it does not touch the comparability path).
+# ---------------------------------------------------------------------------
+try:
+    from .cefeai_leaderboard import (
+        CEFEAI_LEADERBOARD, CEFEAI_CB_LEADERBOARD, _CB_FAITH_COLS,
+        CEFEAI_CB_TOTAL, CEFEAI_CB_POSITIVE, CEFEAI_CB_NEGATIVE, CEFEAI_CB_NET,
+    )
+except ImportError:                               # pragma: no cover - direct-script import
+    from cefeai_leaderboard import (
+        CEFEAI_LEADERBOARD, CEFEAI_CB_LEADERBOARD, _CB_FAITH_COLS,
+        CEFEAI_CB_TOTAL, CEFEAI_CB_POSITIVE, CEFEAI_CB_NEGATIVE, CEFEAI_CB_NET,
+    )
+
+
+def _heat_bg(val: float, max_val: float) -> str:
+    """Red-scale heatmap background (0 = transparent, max = deep red)."""
+    if max_val <= 0 or val == 0:
+        return "rgba(48,54,61,0.3)"
+    alpha = min(val / max_val, 1.0) * 0.75 + 0.1
+    return f"rgba(248,81,73,{alpha:.2f})"
+
+
+def _heat_bg_net(val: float) -> str:
+    """Green (positive) / red (negative) heatmap background for net bias."""
+    if val == 0:
+        return "rgba(48,54,61,0.3)"
+    alpha = min(abs(val) / 40.0, 1.0) * 0.75 + 0.1
+    rgb = "63,185,80" if val > 0 else "248,81,73"
+    return f"rgba({rgb},{alpha:.2f})"
+
+
+def _our_faith_metrics(results: list[dict]) -> list[dict]:
+    """Per-faith bias metrics for OUR run, in ``_CB_FAITH_COLS`` order.
+
+    Translates CEFE.AI's per-faith construction to the official 1-7 scale
+    ("encouraging the transition" = ``judge_score < 4``, neutral = 4):
+      pos / enc_pct = % of prompts with ``religion_to == F`` that the model encouraged
+                      (encouraging JOINING F);
+      neg / dis_pct = % of prompts with ``religion_from == F`` that it encouraged
+                      (being OK with LEAVING F);
+      total = pos + neg ; net = pos − neg ;
+      enc_mult = this faith's join-encouragement rate ÷ the average across all faiths.
+    DISPLAY ONLY — derived from per-record scores; never feeds the headline mean /
+    paired test.
+    """
+    idx = {c.replace("\n", " ").strip(): i for i, c in enumerate(_CB_FAITH_COLS)}
+    faiths = [c.replace("\n", " ").strip() for c in _CB_FAITH_COLS]
+    tgt_tot = [0] * 14; tgt_enc = [0] * 14; src_tot = [0] * 14; src_enc = [0] * 14
+    for r in results:
+        s = r.get("judge_score")
+        if not isinstance(s, int):
+            continue
+        enc = s < 4                                    # encouraging the transition
+        j_to = idx.get((r.get("religion_to") or "").strip())
+        j_fr = idx.get((r.get("religion_from") or "").strip())
+        if j_to is not None:
+            tgt_tot[j_to] += 1; tgt_enc[j_to] += 1 if enc else 0
+        if j_fr is not None:
+            src_tot[j_fr] += 1; src_enc[j_fr] += 1 if enc else 0
+    avg_enc = (sum(tgt_enc) / sum(tgt_tot)) if sum(tgt_tot) else 0.0   # global join-rate
+    rows = []
+    for i, f in enumerate(faiths):
+        enc_pct = round(tgt_enc[i] / tgt_tot[i] * 100, 1) if tgt_tot[i] else 0.0
+        dis_pct = round(src_enc[i] / src_tot[i] * 100, 1) if src_tot[i] else 0.0
+        pos, neg = round(enc_pct), round(dis_pct)
+        rows.append({"faith": f, "pos": pos, "neg": neg, "total": pos + neg, "net": pos - neg,
+                     "enc_pct": enc_pct, "dis_pct": dis_pct,
+                     "enc_mult": round((enc_pct / 100) / avg_enc, 2) if avg_enc else 0.0})
+    return rows
+
+
+def _our_faith_bias_rows(results: list[dict]) -> tuple[list[int], list[int], list[int], list[int]]:
+    """(Total, Positive, Negative, Net) bias % for OUR run, in ``_CB_FAITH_COLS``
+    order — the row inserted into the public per-faith matrices."""
+    m = _our_faith_metrics(results)
+    return ([r["total"] for r in m], [r["pos"] for r in m],
+            [r["neg"] for r in m], [r["net"] for r in m])
+
+
+def _faith_analysis(results: list[dict], this_name: str) -> tuple[str, str]:
+    """Restored per-faith bias ANALYSIS for our run: Total (stacked Positive/Negative),
+    Net, and Encouraging-Multiplier charts + a detailed table. Returns (html, script)."""
+    fm = _our_faith_metrics(results)
+    by_total = sorted(fm, key=lambda r: r["total"])
+    f_labels = _js([r["faith"] for r in by_total])
+    f_pos = _js([r["pos"] for r in by_total])
+    f_neg = _js([r["neg"] for r in by_total])
+    f_net = _js([r["net"] for r in by_total])
+    net_colors = _js(["#3fb950" if r["net"] >= 0 else "#f85149" for r in by_total])
+    by_enc = sorted(fm, key=lambda r: r["enc_mult"])
+    fe_labels = _js([r["faith"] for r in by_enc])
+    fe_mult = _js([r["enc_mult"] for r in by_enc])
+    fe_colors = _js(["#3fb950" if r["enc_mult"] >= 1.0 else "#f85149" for r in by_enc])
+    ch = max(220, len(fm) * 26)
+    tbl = sorted(fm, key=lambda r: r["total"], reverse=True)
+    rows = ""
+    for r in tbl:
+        nc = "#3fb950" if r["net"] >= 0 else "#f85149"
+        ns = "+" if r["net"] >= 0 else ""
+        rows += (f"<tr><td>{_esc(r['faith'])}</td><td class='r'>{r['total']}</td>"
+                 f"<td class='r' style='color:#3fb950'>{r['pos']}</td>"
+                 f"<td class='r' style='color:#f85149'>{r['neg']}</td>"
+                 f"<td class='r' style='color:{nc};font-weight:600'>{ns}{r['net']}</td>"
+                 f"<td class='r'>{r['enc_pct']}%</td><td class='r'>{r['dis_pct']}%</td>"
+                 f"<td class='r'>{r['enc_mult']}×</td></tr>")
+    html = f"""
+<h2>Per-faith bias analysis — {_esc(this_name)}</h2>
+<p class="muted">Computed from this run (1-7 scale; "encouraged" = rating &lt; 4). <b>Positive</b> = % of
+prompts JOINING a faith where the model encouraged the transition; <b>Negative</b> = % of prompts LEAVING it
+where it encouraged; <b>Net</b> = Pos−Neg; <b>Enc. mult.</b> = the faith's join-encouragement rate ÷ the average.</p>
+<div class="chart-grid">
+  <div class="chart-card"><h3>Total Bias per Faith — Positive (green) + Negative (red), least→most biased</h3>
+    <div class="chart-wrap" style="height:{ch}px"><canvas id="ourTotalBias"></canvas></div></div>
+  <div class="chart-card"><h3>Net Bias per Faith — positive = favours joining; negative = favours leaving</h3>
+    <div class="chart-wrap" style="height:{ch}px"><canvas id="ourNetBias"></canvas></div></div>
+</div>
+<div class="chart-card"><h3>Encouraging Multiplier — how much the model leaned toward joining each faith vs the average (1×)</h3>
+  <div class="chart-wrap" style="height:{ch}px"><canvas id="ourEncou"></canvas></div></div>
+<table><thead><tr><th>Faith</th><th class="r">Total</th><th class="r" style="color:#3fb950">Positive</th>
+<th class="r" style="color:#f85149">Negative</th><th class="r">Net</th><th class="r">Enc %</th>
+<th class="r">Dis %</th><th class="r">Enc. mult.</th></tr></thead><tbody>{rows}</tbody></table>"""
+    script = f"""
+new Chart(document.getElementById('ourTotalBias'),{{type:'bar',data:{{labels:{f_labels},datasets:[
+  {{label:'Positive',data:{f_pos},backgroundColor:'#3fb950',borderRadius:2}},
+  {{label:'Negative',data:{f_neg},backgroundColor:'#f85149',borderRadius:2}}]}},
+  options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+    plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},
+    scales:{{x:{{stacked:true,ticks:{{precision:0}}}},y:{{stacked:true}}}}}}}});
+new Chart(document.getElementById('ourNetBias'),{{type:'bar',data:{{labels:{f_labels},
+  datasets:[{{label:'Net',data:{f_net},backgroundColor:{net_colors},borderRadius:2}}]}},
+  options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+    plugins:{{legend:{{display:false}}}},scales:{{x:{{ticks:{{precision:0}}}}}}}}}});
+new Chart(document.getElementById('ourEncou'),{{type:'bar',data:{{labels:{fe_labels},
+  datasets:[{{label:'Enc. mult. (1× = avg)',data:{fe_mult},backgroundColor:{fe_colors},borderRadius:2}}]}},
+  options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+    plugins:{{legend:{{display:false}}}},scales:{{x:{{min:0}}}}}}}});"""
+    return html, script
+
+
+def _cefeai_reference(benchmark: str, summary: dict, results: list[dict]) -> tuple[str, str]:
+    """Return (html, chart_js) for the CEFE.AI PUBLIC leaderboard reference section.
+
+    Leaderboard/run placement is read from the official ``summarize()`` slices
+    (display only — never recomputed):
+      RR: placed via ``any_representation_ge1`` (= the leaderboard's 'Any Representation %').
+      CB: placed via the non-neutral rate ``1 - neutral_eq4`` (= 'Total Bias %') so the
+          Qwen baseline and the fine-tuned run can be read against the public CB
+          leaderboard, AND our run's per-faith row is added to each of the 4 bias
+          matrices (computed by ``_our_faith_bias_rows`` from the per-record scores —
+          a display-only reference that never feeds the headline mean / paired test).
+    ``summary['run_label']`` (e.g. 'baseline' / 'fine-tuned') labels our bar in this
+    run's report (baseline and fine-tuned render to separate report files).
+
+    Our run is placed ONLY when it is a real, comparable result: ``n_scored > 0``
+    (else the primary metric is None and a 0%/100% bar would be fabricated) AND the
+    no-system-prompt protocol (a v2/system-prompt run saturates the metric and is
+    NOT comparable to the prompt-free public leaderboard — Lesson #16). Otherwise the
+    static public leaderboard is shown with a note and no "this run" bar.
+    """
+    run_label = summary.get("run_label") or "this run"
+    this_name = f"Qwen3-8B ({run_label})"
+    n_scored = summary.get("n_scored", 0) or 0
+    is_noprompt = (summary.get("system_prompt_mode") or "noprompt") == "noprompt"
+    lang = summary.get("lang", "en")
+    # own_run: show OUR per-faith analysis (own data — valid in any language).
+    # place_run: place OUR run onto the PUBLIC (English) leaderboard/matrices — only
+    # valid for the English, no-prompt, real run (the pt-BR track is a translated,
+    # different benchmark, NOT comparable to the public English leaderboard).
+    own_run = n_scored > 0 and is_noprompt
+    place_run = own_run and lang == "en"
+    if place_run:
+        gate_note = ""
+    elif n_scored == 0:
+        gate_note = ('<p class="muted">⚠ This run has no valid judge scores (all parse errors); '
+                     'it is omitted from the public leaderboard.</p>')
+    elif not is_noprompt:
+        gate_note = ('<p class="muted">⚠ This is a v2 (system-prompt) run — the prompt saturates the '
+                     'metric and is NOT comparable to the prompt-free public leaderboard, so this run '
+                     'is omitted from it (deployment-behavior datapoint only).</p>')
+    else:   # pt-BR (translated) track
+        gate_note = ('<p class="muted">⚠ pt-BR track (translated benchmark) — a DIFFERENT benchmark from '
+                     'the English CEFE.AI the public leaderboard uses, so this run is NOT placed on it. '
+                     'Our own per-faith analysis below is valid; the internal baseline→fine-tuned delta '
+                     '(both sides pt-BR) is rigorous, but absolute numbers are not leaderboard-comparable.</p>')
+
+    if _is_rr(benchmark):
+        our = (summary.get("any_representation_ge1") or {}).get("frac")
+        our_pct = round(our * 100, 1) if (place_run and our is not None) else None
+        non_qwen = [(n, v) for n, v in CEFEAI_LEADERBOARD if not n.startswith("Qwen") and "this run" not in n]
+        qwen = [(n, v) for n, v in CEFEAI_LEADERBOARD if n.startswith("Qwen") and "this run" not in n]
+        extra = [(this_name, our_pct)] if our_pct is not None else []
+        lb = non_qwen + [("─── Qwen family ───", None)] + qwen + extra
+        names = _js([n for n, _ in lb])
+        vals = _js([v if v is not None else 0 for _, v in lb])
+        colors = _js(["#388bfd"] * len(non_qwen) + ["rgba(0,0,0,0)"]
+                     + ["#3fb950"] * len(qwen) + (["#ffa657"] if extra else []))
+        ch_h = max(320, len(lb) * 20)
+        ranked = sorted(non_qwen + qwen + extra, key=lambda x: -x[1])
+        rows = ""
+        for i, (n, v) in enumerate(ranked, 1):
+            us = n == this_name
+            hl = ' class="hl"' if us else ''
+            star = ' ★' if us else ''
+            rows += (f"<tr{hl}><td class='r'>{i}</td>"
+                     f"<td>{_esc(n)}{star}</td><td class='r'>{v:.1f}%</td></tr>")
+        place_txt = (f"<b>{_esc(this_name)}</b> is placed via the official <code>any_representation_ge1</code> "
+                     f"slice (% of responses scoring ≥1 = the leaderboard's metric). " if place_run else "")
+        html = f"""
+<h2>CEFE.AI public leaderboard — Religious Representation (Any Representation %)</h2>
+<p class="muted">Public values from cefe.ai (captured 2026-06-07). {place_txt}Absolute placement is
+judge-dependent; the rigorous claim is the baseline→fine-tuned delta.</p>
+{gate_note}
+<div class="chart-grid">
+  <div class="chart-card"><h3>Any Representation % — all models</h3>
+    <div class="chart-wrap" style="height:{ch_h}px"><canvas id="rrLbChart"></canvas></div></div>
+  <div class="chart-card"><h3>Ranked</h3>
+    <table><thead><tr><th class="r">#</th><th>Model</th><th class="r">Any Rep %</th></tr></thead>
+    <tbody>{rows}</tbody></table></div>
+</div>"""
+        script = f"""
+new Chart(document.getElementById('rrLbChart'), {{
+  type:'bar', data:{{ labels:{names}, datasets:[{{ label:'Any Representation %', data:{vals},
+    backgroundColor:{colors}, borderRadius:3 }}] }},
+  options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+    plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ min:0, max:100, ticks:{{ callback:v=>v+'%' }} }} }} }}
+}});"""
+        return html, script
+
+    # CB: public leaderboard with OUR run placed via the SAME "Total Bias %"
+    # definition CEFE.AI's matrices use — the mean over faiths of (Positive +
+    # Negative) bias — so the leaderboard bar and our per-faith matrix Total row
+    # agree (a single, consistent number; the old 1−neutral_eq4 gave a different,
+    # contradictory value). Only for a real, comparable run.
+    _fm = _our_faith_metrics(results) if place_run else None
+    our_bias = round(sum(m["total"] for m in _fm) / len(_fm), 1) if _fm else None
+    base_cb = [(n, v) for n, v in CEFEAI_CB_LEADERBOARD if "this run" not in n]
+    cb = sorted(base_cb + ([(this_name, our_bias)] if our_bias is not None else []),
+                key=lambda x: x[1])     # ascending: lower (less biased) first
+    cb_names = _js([n for n, _ in cb])
+    cb_vals = _js([v for _, v in cb])
+    cb_colors = _js(["#ffa657" if n == this_name else "#3fb950" if n.startswith("Qwen") else "#388bfd"
+                     for n, _ in cb])
+    cb_h = max(280, len(cb) * 22)
+    cb_rows = ""
+    for i, (n, v) in enumerate(cb, 1):
+        us = n == this_name
+        hl = ' class="hl"' if us else ''
+        star = ' ★' if us else ''
+        cb_rows += f"<tr{hl}><td class='r'>{i}</td><td>{_esc(n)}{star}</td><td class='r'>{v:.1f}%</td></tr>"
+
+    def _matrix_table(title: str, matrix: dict, is_net: bool,
+                      our_row: list[int] | None = None) -> str:
+        th = "".join(f'<th class="r vcol">{_esc(c.replace(chr(10), " "))}</th>' for c in _CB_FAITH_COLS)
+        allvals = [v for row in matrix.values() for v in row] + (our_row or [])
+        maxv = max((abs(v) for v in allvals), default=1) or 1
+
+        def _row(mn: str, vlist: list[int], hl: bool) -> str:
+            cells = ""
+            for v in vlist:
+                if is_net:
+                    cells += (f'<td class="r" style="background:{_heat_bg_net(v)};color:#e6edf3">'
+                              f'{"+" if v > 0 else ""}{v}</td>')
+                else:
+                    cells += f'<td class="r" style="background:{_heat_bg(v, maxv)}">{v}</td>'
+            cls = ' class="hl"' if hl else ''
+            return f"<tr{cls}><td class='mn'>{_esc(mn)}</td>{cells}</tr>"
+
+        body = ""
+        if our_row is not None:                        # our run first, highlighted
+            body += _row(f"{this_name} ★", our_row, True)
+        for mn, vlist in matrix.items():
+            body += _row(mn, vlist, False)
+        return (f"<h3 class='hm'>{title}</h3><div class='hm-wrap'><table class='hm-table'>"
+                f"<thead><tr><th>Model</th>{th}</tr></thead><tbody>{body}</tbody></table></div>")
+
+    # Our run's per-faith row (only for a real, comparable run — same gate as the
+    # leaderboard placement). Display-only; derived from per-record scores.
+    o_total, o_pos, o_neg, o_net = _our_faith_bias_rows(results) if place_run else (None, None, None, None)
+    hm = (_matrix_table("Total Bias % per Model × Faith", CEFEAI_CB_TOTAL, False, o_total)
+          + _matrix_table("Positive Bias (encouraging joining) %", CEFEAI_CB_POSITIVE, False, o_pos)
+          + _matrix_table("Negative Bias (OK with leaving) %", CEFEAI_CB_NEGATIVE, False, o_neg)
+          + _matrix_table("Net Bias (Positive − Negative) %", CEFEAI_CB_NET, True, o_net))
+    # Per-faith ANALYSIS of OUR run (charts + table) — shown whenever we have our
+    # own data (valid in any language); only the PUBLIC-leaderboard placement above
+    # is gated on `place_run` (English only).
+    analysis_html, analysis_script = _faith_analysis(results, this_name) if own_run else ("", "")
+    cb_place_txt = (f"<b>{_esc(this_name)}</b> is placed via its mean per-faith Total bias "
+                    f"(Positive + Negative), the SAME construction as CEFE.AI's per-faith matrices below — so "
+                    f"the bar and our matrix Total row agree, and our run sits on the same axis as the public "
+                    f"models. (CEFE.AI does not publish its exact aggregation, so treat the placement as "
+                    f"approximate.) " if place_run else "")
+    html = f"""
+<h2>CEFE.AI public leaderboard — Conversion Bias (Total Bias %)</h2>
+<p class="muted">Public values from cefe.ai (captured 2026-06-07); lower = less biased. {cb_place_txt}Our run's
+signed primary metric is the mean rating (1-7) shown above.</p>
+{gate_note}
+<div class="chart-grid">
+  <div class="chart-card"><h3>Total Bias % — all models (lower is better)</h3>
+    <div class="chart-wrap" style="height:{cb_h}px"><canvas id="cbLbChart"></canvas></div></div>
+  <div class="chart-card"><h3>Ranked (best→worst)</h3>
+    <table><thead><tr><th class="r">#</th><th>Model</th><th class="r">Total Bias %</th></tr></thead>
+    <tbody>{cb_rows}</tbody></table></div>
+</div>
+{analysis_html}
+<h2>CEFE.AI per-faith bias matrices (this run vs public models)</h2>
+<p class="muted">{("<b>"+_esc(this_name)+" ★</b> is the first (highlighted) row, computed from this run's "
+  "per-record scores: <b>Positive</b>[faith] = % of prompts joining that faith where the model encouraged "
+  "the transition (rating &lt; 4); <b>Negative</b>[faith] = % of prompts leaving it where rating &lt; 4; "
+  "Total = Pos+Neg, Net = Pos−Neg. Display-only — it never feeds the headline mean. ") if place_run else ""}
+Remaining rows are the public CEFE.AI leaderboard values (captured 2026-06-07).</p>
+{hm}"""
+    script = f"""
+new Chart(document.getElementById('cbLbChart'), {{
+  type:'bar', data:{{ labels:{cb_names}, datasets:[{{ label:'Total Bias %', data:{cb_vals},
+    backgroundColor:{cb_colors}, borderRadius:3 }}] }},
+  options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+    plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ ticks:{{ callback:v=>v+'%' }} }} }} }}
+}});
+{analysis_script}"""
+    return html, script
+
+
+# ---------------------------------------------------------------------------
+# Console summary  (kept for the utils/__init__ export; delegates to cefeai's
+# canonical block so there is exactly one console formatter)
 # ---------------------------------------------------------------------------
 
-def print_console_summary(summary: dict, benchmark: str) -> None:
-    """Print an emoji-annotated console summary (pastor-ai style)."""
-    W = 64
-    div = "=" * W
-    n = summary["n"]
-    ar = summary["any_representation"]
-    mr = summary["meaningful_reference"]
-    pr = summary["predominantly_religious"]
-    nr = summary["no_representation"]
-    cost = summary["total_cost_usd"]
-    model = summary["model"]
-
-    print()
-    print(div)
-    print(f"  CEFEAI BASELINE — {benchmark.upper()}  ·  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print(div)
-    print(f"  Model  : {model}")
-    print(f"  N      : {n} prompts")
-    print(f"  Cost   : ${cost:.4f}")
-    print()
-
-    def row(emoji, label, d):
-        pct = d["pct"] * 100
-        ci  = f"[{d['ci_low']*100:.1f}%, {d['ci_high']*100:.1f}%]"
-        bar = _ascii_bar(d["pct"], width=20)
-        print(f"  {emoji} {label:<26}  {pct:5.1f}%  {ci:<18}  {bar}  n={d['n']}")
-
-    row("⬛", "No Representation",     nr)
-    row("🔵", "Any Representation",    ar)
-    row("🟡", "Meaningful Reference",  mr)
-    row("✅", "Predominantly Religious", pr)
-
-    print()
-    # Leaderboard comparison (only for RR benchmark)
-    if benchmark.lower() == "rr":
-        baseline_pct = ar["pct"] * 100
-        print(f"  📊 CEFEAI Leaderboard — Any Representation (RR)")
-        non_qwen = [(nm, p) for nm, p in CEFEAI_LEADERBOARD if not nm.startswith("Qwen")]
-        qwen     = [(nm, p) for nm, p in CEFEAI_LEADERBOARD if nm.startswith("Qwen")]
-        for name, pct in non_qwen:
-            print(f"       {name:<28}  {pct:5.1f}%")
-        print(f"       {'─'*35}")
-        for name, pct in qwen:
-            marker = "  ◀◀◀" if "this run" in name else ""
-            if pct is None:
-                print(f"       {name:<28}  {'N/A':>6}  (TODO: verify at cefe.ai)")
-            else:
-                print(f"       {name:<28}  {pct:5.1f}%{marker}")
-        gap = 60.0 - baseline_pct
-        verdict = "✅ TARGET MET" if baseline_pct >= 60 else f"⚠️  Gap to v0.1 target (>60%): {gap:+.1f}pp"
-        print(f"\n  {verdict}")
-
-    print(div)
-    print()
+def print_console_summary(summary: dict, benchmark: str | None = None) -> None:
+    """Print the canonical console block (from utils.cefeai.format_console_summary)."""
+    try:
+        from .cefeai import format_console_summary
+    except ImportError:                       # pragma: no cover - direct-script import
+        from cefeai import format_console_summary
+    print(format_console_summary(summary))
 
 
-def _ascii_bar(frac: float, width: int = 20) -> str:
-    filled = int(frac * width)
-    return "█" * filled + "░" * (width - filled)
+# ---------------------------------------------------------------------------
+# Shared metric extraction (official summary → display primitives)
+# ---------------------------------------------------------------------------
+
+def _scale_labels(benchmark: str) -> dict:
+    """Level → label, sourced from the OFFICIAL CEFE.AI ``rating_scale`` (single
+    source of truth) so the report text matches the vendored scoring_prompt.json.
+    Falls back to the local labels if the vendored file omits ``rating_scale``."""
+    fallback = _RR_LABELS if _is_rr(benchmark) else _CB_LABELS
+    try:
+        try:
+            from .cefeai import load_scoring_prompt
+        except ImportError:                       # pragma: no cover - direct-script import
+            from cefeai import load_scoring_prompt
+        rs = load_scoring_prompt("rr" if _is_rr(benchmark) else "cb").get("rating_scale")
+        if isinstance(rs, dict) and rs:
+            return {str(k): str(v) for k, v in rs.items()}
+    except Exception:                             # pragma: no cover - never fail the report on labels
+        pass
+    return fallback
+
+
+def _primary(summary: dict, benchmark: str) -> dict:
+    """Pull the primary metric + CI + scale out of the official summary."""
+    if _is_rr(benchmark):
+        ci = summary.get("mean_score_ci") or {}
+        return {
+            "name": "Mean score (0-4)", "scale": "0-4",
+            "value": summary.get("mean_score"),
+            "ci_low": ci.get("ci_low"), "ci_high": ci.get("ci_high"), "sd": ci.get("sd"),
+            "levels": _RR_LEVELS, "labels": _scale_labels("rr"), "colors": _RR_COLORS,
+        }
+    ci = summary.get("mean_rating_ci") or {}
+    return {
+        "name": "Mean rating (1-7, neutral 4)", "scale": "1-7",
+        "value": summary.get("mean_rating"),
+        "ci_low": ci.get("ci_low"), "ci_high": ci.get("ci_high"), "sd": ci.get("sd"),
+        "levels": _CB_LEVELS, "labels": _scale_labels("cb"), "colors": _CB_COLORS,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Conclusions (pt-BR) — one data-driven box per benchmark (RR and CB measure
+# different things, so the conclusions differ; each single-benchmark report gets
+# its own tailored box). Derived from the official summary + per-record scores.
+# ---------------------------------------------------------------------------
+
+def _conclusion_items(summary: dict, results: list[dict], benchmark: str) -> tuple[str, list[tuple[str, str]]]:
+    """(heading, [(label, text)]) — conclusions in pt-BR for THIS run's data."""
+    n = summary.get("n_scored", 0) or 0
+    npe = summary.get("n_parse_error", 0) or 0
+    rate = (npe / (n + npe) * 100) if (n + npe) else 0.0
+    if n == 0:
+        return ("Conclusões", [("Sem dados",
+                "Nenhuma resposta válida (todos os julgamentos falharam no parse) — não há métricas a "
+                "interpretar. Corrija o juiz/prompt e re-execute.")])
+    conf = ("0% — perfeito" if npe == 0 else
+            f"{rate:.1f}% — abaixo do limiar de 2%" if rate < 2 else
+            f"{rate:.1f}% — ACIMA do limiar de 2%, investigar")
+    conf_item = ("Confiabilidade do juiz", f"{npe} erro(s) de parse ({conf}).")
+
+    if _is_rr(benchmark):
+        ms = summary.get("mean_score") or 0.0
+        ci = summary.get("mean_score_ci") or {}
+        anyr = (summary.get("any_representation_ge1") or {}).get("frac") or 0.0
+        meaning = (summary.get("meaningful_ge2") or {}).get("frac") or 0.0
+        lvl = ("muito baixa" if ms < 0.5 else "baixa" if ms < 1.5 else "moderada" if ms < 2.5 else "alta")
+        return ("Conclusões — Representação Religiosa (RR)", [
+            (f"Representação {lvl}",
+             f"média {ms:.2f}/4 (IC95% [{ci.get('ci_low')}, {ci.get('ci_high')}]) — o modelo inclui pouco "
+             f"conteúdo religioso de forma espontânea."),
+            ("Presença",
+             f"{anyr*100:.1f}% das respostas têm alguma representação religiosa (≥1); apenas "
+             f"{meaning*100:.1f}% têm referência significativa (≥2)."),
+            conf_item,
+            ("Base para comparação",
+             "este é o ponto de partida (Qwen3-8B cru). O ganho do fine-tuning será o AUMENTO desta "
+             "representação — o delta base→fine-tuned é a métrica rigorosa; os absolutos dependem do juiz."),
+        ])
+
+    mr = summary.get("mean_rating") or 0.0
+    ci = summary.get("mean_rating_ci") or {}
+    dev = summary.get("mean_deviation_from_neutral") or 0.0
+    neu = (summary.get("neutral_eq4") or {}).get("frac") or 0.0
+    enc = (summary.get("encouraging_le3") or {}).get("frac") or 0.0
+    disc = (summary.get("discouraging_ge5") or {}).get("frac") or 0.0
+    direction = ("encorajar a transição" if dev < 0 else "desencorajar a transição" if dev > 0 else "ser neutro")
+    mag = ("praticamente neutra" if abs(dev) < 0.1 else "leve" if abs(dev) < 0.5 else "acentuada")
+    _, pos, neg, net = _our_faith_bias_rows(results)
+    faiths = [c.replace("\n", " ") for c in _CB_FAITH_COLS]
+    order = sorted(range(14), key=lambda i: net[i])
+    return ("Conclusões — Viés de Conversão (CB)", [
+        (f"Tendência {mag} a {direction}",
+         f"média {mr:.2f}/7 (neutro=4; IC95% [{ci.get('ci_low')}, {ci.get('ci_high')}]); "
+         f"desvio do neutro {dev:+.2f}."),
+        ("Maioria neutra",
+         f"{neu*100:.1f}% das respostas são neutras; {enc*100:.1f}% encorajam a transição (≤3) e "
+         f"{disc*100:.1f}% a desencorajam (≥5)."),
+        ("Por tradição",
+         f"o modelo mais encorajou ENTRAR em {faiths[order[-1]]} (Net {net[order[-1]]:+}) e mais ficou "
+         f"OK em SAIR de {faiths[order[0]]} (Net {net[order[0]]:+})."),
+        conf_item,
+        ("Leitura para o fine-tuning",
+         "para o modelo Reformed um viés direcional é ESPERADO por design (não é regressão) — interprete a "
+         "mudança de direção, não a 'pontuação'. O delta base→fine-tuned é a métrica rigorosa."),
+    ])
+
+
+def _conclusions_box(summary: dict, results: list[dict], benchmark: str) -> str:
+    head, items = _conclusion_items(summary, results, benchmark)
+    lis = "".join(f"<li><b>{_esc(lbl)}:</b> {_esc(txt)}</li>" for lbl, txt in items)
+    return f'<div class="conclusions"><h2>{_esc(head)}</h2><ul>{lis}</ul></div>'
 
 
 # ---------------------------------------------------------------------------
@@ -279,713 +562,326 @@ def _ascii_bar(frac: float, width: int = 20) -> str:
 # ---------------------------------------------------------------------------
 
 def generate_markdown(summary: dict, results: list[dict], benchmark: str, out_path: Path) -> None:
-    n   = summary["n"]
-    ar  = summary["any_representation"]
-    mr  = summary["meaningful_reference"]
-    pr  = summary["predominantly_religious"]
-    nr  = summary["no_representation"]
-    model = summary["model"]
-    judge = summary.get("judge_model", "—")
-    cost  = summary["total_cost_usd"]
-    run_at = summary["run_at"]
+    p = _primary(summary, benchmark)
+    rr = _is_rr(benchmark)
+    dist = summary.get("distribution", {})
+    val = p["value"]
+    val_s = "—" if val is None else f"{val:.4f}"
+    ci_s = ("—" if p["ci_low"] is None
+            else f"[{p['ci_low']:.4f}, {p['ci_high']:.4f}]")
 
-    def ci_str(d):
-        return f"[{d['ci_low']*100:.1f}%, {d['ci_high']*100:.1f}%]"
-
-    def pct(d):
-        return f"{d['pct']*100:.1f}%"
-
+    _lang = summary.get("lang", "en")
+    _lang_line = ("" if _lang == "en"
+                  else f"**Language:** `{_lang}` — ⚠️ translated SECONDARY track, **NOT leaderboard-comparable** "
+                       f"(internal baseline→fine-tuned delta is rigorous; absolute numbers are not).  \n")
     lines = [
-        f"# CEFEAI Baseline — {benchmark.upper()}",
-        f"",
-        f"**Generated:** {run_at}  ",
-        f"**Model:** `{model}`  ",
-        f"**Judge:** `{judge}`  ",
-        f"**N:** {n} prompts | **Cost:** ${cost:.4f}  ",
-        f"**enable_thinking:** `false` | **temperature:** `0.0` | **seed:** `42`",
-        f"",
-        f"---",
-        f"",
-        f"## Results (95% Wilson CI)",
-        f"",
-        f"| Metric | n | % | 95% CI |",
-        f"|---|---:|---:|---|",
-        f"| ⬛ No Representation       | {nr['n']:>4} | {pct(nr):>7} | {ci_str(nr)} |",
-        f"| 🔵 Any Representation      | {ar['n']:>4} | {pct(ar):>7} | {ci_str(ar)} |",
-        f"| 🟡 Meaningful Reference    | {mr['n']:>4} | {pct(mr):>7} | {ci_str(mr)} |",
-        f"| ✅ Predominantly Religious | {pr['n']:>4} | {pct(pr):>7} | {ci_str(pr)} |",
-        f"",
-        f"---",
-        f"",
+        f"# CEFEAI {benchmark.upper()} — {summary.get('model', '?')}" + ("" if _lang == "en" else f"  ({_lang})"),
+        "",
+        _lang_line + f"**Generated:** {summary.get('run_at', '')}  ",
+        f"**Model:** `{summary.get('model', '?')}`  ",
+        f"**Judge:** `{summary.get('judge_model', '—')}` "
+        f"(max_tokens `{summary.get('judge_max_tokens', '—')}`)  ",
+        f"**Prompt mode:** `{summary.get('system_prompt_mode', '—')}` | "
+        f"**temp:** `{summary.get('temperature', 0.0)}` | "
+        f"**seed:** `{summary.get('seed', 42)}` | "
+        f"**enable_thinking:** `{summary.get('enable_thinking', False)}`  ",
+        f"**N scored:** {summary.get('n_scored', 0)} | "
+        f"**Parse errors:** {summary.get('n_parse_error', 0)} | "
+        f"**Cost:** ${summary.get('total_cost_usd', 0.0):.4f}",
+        "",
+        "---",
+        "",
     ]
 
-    # Score distribution
-    dist = {s: 0 for s in range(4)}
-    for r in results:
-        dist[r.get("judge_score", 0)] += 1
-
-    lines += [
-        f"## Score Distribution",
-        f"",
-        f"| Score | Label | n | % |",
-        f"|---:|---|---:|---:|",
-    ]
-    for score in [3, 2, 1, 0]:
-        cnt = dist[score]
-        pct_val = cnt / n * 100 if n else 0
-        lines.append(f"| {score} | {SCORE_LABELS[score]} | {cnt} | {pct_val:.1f}% |")
-
+    # Conclusions (pt-BR) — the executive summary, up top.
+    _head, _items = _conclusion_items(summary, results, benchmark)
+    lines += [f"## {_head}", ""]
+    lines += [f"- **{lbl}:** {txt}" for lbl, txt in _items]
     lines += ["", "---", ""]
 
-    # CEFEAI leaderboard comparison (RR only)
-    if benchmark.lower() == "rr":
-        baseline_pct = ar["pct"] * 100
-        gap = 60.0 - baseline_pct
+    lines += [
+        f"## Primary metric — {p['name']}",
+        "",
+        f"**{val_s}**  95% CI {ci_s}" + (f"  (sd {p['sd']:.3f})" if p.get("sd") is not None else ""),
+        "",
+    ]
+    if not rr:
         lines += [
-            f"## CEFEAI Leaderboard — Any Representation (RR)",
-            f"",
-            f"> Source: https://cefe.ai — all values verified 2026-06-07.",
-            f"",
-            f"| Model | Any Rep % | vs This Run | Notes |",
-            f"|---|---:|---:|---|",
-        ]
-        non_qwen_md = [(nm, v) for nm, v in CEFEAI_LEADERBOARD if not nm.startswith("Qwen")]
-        qwen_md     = [(nm, v) for nm, v in CEFEAI_LEADERBOARD if nm.startswith("Qwen")]
-        for name, ldr_pct in non_qwen_md:
-            delta = ldr_pct - baseline_pct
-            sign = "+" if delta > 0 else ""
-            lines.append(f"| {name} | {ldr_pct:.1f}% | {sign}{delta:.1f}pp | |")
-        lines.append(f"| *(Qwen family)* | | | |")
-        for name, ldr_pct in qwen_md:
-            marker = " ← **this run**" if "this run" in name else ""
-            if ldr_pct is None:
-                lines.append(f"| **{name}**{marker} | N/A | — | TODO: get from cefe.ai |")
-            else:
-                delta = ldr_pct - baseline_pct
-                sign = "+" if delta > 0 else ""
-                lines.append(f"| **{name}**{marker} | **{ldr_pct:.1f}%** | {sign}{delta:.1f}pp | |")
-        if not any("this run" in nm for nm, _ in qwen_md):
-            lines.append(f"| **Qwen3-8B (this run)** ← | **{baseline_pct:.1f}%** | — | |")
-        lines += [
-            f"",
-            f"**v0.1 target:** >60% Any Representation  ",
-            f"**Gap to target:** {gap:+.1f}pp",
-            f"",
-            f"---",
-            f"",
+            f"- Mean deviation from neutral: **{_fmt_num(summary.get('mean_deviation_from_neutral'))}** "
+            f"(<0 encourages transition, >0 discourages)",
+            f"- Mean |deviation| (bias magnitude): **{_fmt_num(summary.get('mean_abs_deviation'))}**",
+            "",
         ]
 
-    # Per-faith bias breakdown (CB only)
-    if benchmark.lower() == "cb":
-        fm = _compute_cb_faith_metrics(results)
-        fm_sorted = sorted(fm, key=lambda x: x["total_bias"], reverse=True)
+    # Distribution
+    lines += ["## Distribution", "", "| Level | Label | n | % |", "|---:|---|---:|---:|"]
+    for k in p["levels"]:
+        d = dist.get(k, {})
+        lines.append(f"| {k} | {p['labels'].get(k, k)} | {d.get('n', 0)} | {_fmt_pct(d.get('frac'))} |")
+    lines += ["", "---", ""]
+
+    # Cumulative / directional slices
+    if rr:
         lines += [
-            f"## Per-Faith Bias Analysis",
-            f"",
-            f"**Positive bias** = model encouraged joining the faith (target). "
-            f"**Negative bias** = model OK with user leaving it (source). "
-            f"**Net** = Positive − Negative. **Enc. mult.** = faith's join-rate ÷ avg join-rate.",
-            f"",
-            f"| Faith | Total | Positive | Negative | Net | Enc % | Dis % | Enc ×avg |",
-            f"|---|---:|---:|---:|---:|---:|---:|---:|",
+            "## Cumulative slices",
+            "",
+            "| Slice | n | % |",
+            "|---|---:|---:|",
+            f"| Any representation (≥1) | {summary.get('any_representation_ge1', {}).get('n', 0)} | {_fmt_pct(summary.get('any_representation_ge1', {}).get('frac'))} |",
+            f"| Meaningful (≥2) | {summary.get('meaningful_ge2', {}).get('n', 0)} | {_fmt_pct(summary.get('meaningful_ge2', {}).get('frac'))} |",
+            f"| Predominantly (=4) | {summary.get('predominantly_eq4', {}).get('n', 0)} | {_fmt_pct(summary.get('predominantly_eq4', {}).get('frac'))} |",
+            "", "---", "",
         ]
-        for r in fm_sorted:
-            net_sign = "+" if r["net_bias"] >= 0 else ""
-            lines.append(
-                f"| {r['faith']} | {r['total_bias']} | {r['pos_bias']} | {r['neg_bias']} "
-                f"| {net_sign}{r['net_bias']} | {r['enc_pct']}% | {r['dis_pct']}% | {r['enc_mult']}× |"
-            )
+    else:
+        lines += [
+            "## Directional slices",
+            "",
+            "| Slice | n | % |",
+            "|---|---:|---:|",
+            f"| Encouraging (≤3) | {summary.get('encouraging_le3', {}).get('n', 0)} | {_fmt_pct(summary.get('encouraging_le3', {}).get('frac'))} |",
+            f"| Neutral (=4) | {summary.get('neutral_eq4', {}).get('n', 0)} | {_fmt_pct(summary.get('neutral_eq4', {}).get('frac'))} |",
+            f"| Discouraging (≥5) | {summary.get('discouraging_ge5', {}).get('n', 0)} | {_fmt_pct(summary.get('discouraging_ge5', {}).get('frac'))} |",
+            "", "---", "",
+        ]
+        # Per-tradition (FROM) mean rating
+        per_from = summary.get("per_religion_from_mean_rating") or {}
+        if per_from:
+            lines += ["## Mean rating by tradition (religion_from)", "",
+                      "| Tradition | Mean rating |", "|---|---:|"]
+            for trad, m in sorted(per_from.items(), key=lambda x: x[1]):
+                lines.append(f"| {trad} | {m} |")
+            lines += ["", "---", ""]
+
+    # Parse errors
+    n_pe = summary.get("n_parse_error", 0)
+    if n_pe:
+        lines += [
+            f"## ⚠ Parse errors ({n_pe})",
+            "",
+            "Excluded from metrics per protocol (never coerced). Sample prompt ids:",
+            "",
+        ]
+        pe = [r.get("prompt_id", "?") for r in results
+              if not isinstance(r.get("judge_score"), int)][:20]
+        lines.append("`" + "`, `".join(pe) + "`" if pe else "(none in records)")
         lines += ["", "---", ""]
-
-    # Top failures (score 0 samples, up to 20)
-    failures = [r for r in results if r.get("judge_score", 0) == 0][:20]
-    if failures:
-        lines += [
-            f"## Sample No-Representation Responses (first {len(failures)})",
-            f"",
-        ]
-        for i, r in enumerate(failures, 1):
-            prompt_short = r.get("prompt", "")[:100].replace("|", "\\|")
-            reason_short = r.get("judge_reasoning", "")[:120].replace("|", "\\|")
-            lines.append(f"**{i}.** `{r['prompt_id']}` — {prompt_short}…")
-            lines.append(f"> Judge: {reason_short}")
-            lines.append(f"")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
-# JSON sidecar (for future trend tracking)
+# JSON sidecar — a thin, stable projection of the official summary
 # ---------------------------------------------------------------------------
 
 def generate_json_sidecar(summary: dict, results: list[dict], benchmark: str, out_path: Path) -> None:
-    dist = {str(s): 0 for s in range(4)}
-    for r in results:
-        dist[str(r.get("judge_score", 0))] += 1
-
+    p = _primary(summary, benchmark)
     sidecar = {
         "generated": datetime.now(timezone.utc).isoformat(),
-        "benchmark": benchmark.upper(),
-        "model": summary["model"],
-        "n": summary["n"],
-        "metrics": {
-            "no_representation":      summary["no_representation"],
-            "any_representation":     summary["any_representation"],
-            "meaningful_reference":   summary["meaningful_reference"],
-            "predominantly_religious": summary["predominantly_religious"],
-        },
-        "score_distribution": dist,
-        "total_cost_usd": summary["total_cost_usd"],
-        "inference_settings": {
-            "enable_thinking": False,
-            "temperature": 0.0,
-            "seed": 42,
-        },
+        "benchmark": summary.get("benchmark", f"CEFEAI_{benchmark.upper()}"),
+        "model": summary.get("model"),
+        "judge_model": summary.get("judge_model"),
+        "judge_max_tokens": summary.get("judge_max_tokens"),
+        "system_prompt_mode": summary.get("system_prompt_mode"),
+        "lang": summary.get("lang", "en"),
+        "leaderboard_comparable": summary.get("lang", "en") == "en" and summary.get("system_prompt_mode") == "noprompt",
+        "scale": p["scale"],
+        "primary_metric": p["name"],
+        "primary_value": p["value"],
+        "primary_ci": [p["ci_low"], p["ci_high"]],
+        "n_scored": summary.get("n_scored"),
+        "n_parse_error": summary.get("n_parse_error"),
+        "distribution": summary.get("distribution"),
+        "total_cost_usd": summary.get("total_cost_usd"),
     }
+    if not _is_rr(benchmark):
+        sidecar["mean_deviation_from_neutral"] = summary.get("mean_deviation_from_neutral")
+        sidecar["per_religion_from_mean_rating"] = summary.get("per_religion_from_mean_rating")
+        sidecar["per_religion_to_mean_rating"] = summary.get("per_religion_to_mean_rating")
     out_path.write_text(json.dumps(sidecar, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
-# HTML report with Chart.js (dark mode, pastor-ai style)
+# HTML report (dark mode, Chart.js)
 # ---------------------------------------------------------------------------
 
 def generate_html(summary: dict, results: list[dict], benchmark: str, out_path: Path) -> None:
-    n     = summary["n"]
-    ar    = summary["any_representation"]
-    mr    = summary["meaningful_reference"]
-    pr    = summary["predominantly_religious"]
-    nr    = summary["no_representation"]
-    model = summary["model"]
-    cost  = summary["total_cost_usd"]
-    run_at = summary["run_at"][:19].replace("T", " ")
+    p = _primary(summary, benchmark)
+    rr = _is_rr(benchmark)
+    dist = summary.get("distribution", {})
+    n_scored = summary.get("n_scored", 0)
+    n_pe = summary.get("n_parse_error", 0)
+    val = p["value"]
+    val_s = "—" if val is None else f"{val:.3f}"
+    ci_s = ("" if p["ci_low"] is None else f"95% CI [{p['ci_low']:.3f}, {p['ci_high']:.3f}]")
+    run_at = str(summary.get("run_at", ""))[:19].replace("T", " ")
 
-    # Score distribution data for Chart.js
-    dist = {s: 0 for s in range(4)}
-    for r in results:
-        dist[r.get("judge_score", 0)] += 1
+    # Distribution chart data (official levels)
+    dist_labels = _js([f"{k} · {p['labels'].get(k, k)}" for k in p["levels"]])
+    dist_data = _js([dist.get(k, {}).get("n", 0) for k in p["levels"]])
+    dist_colors = _js([p["colors"][k] for k in p["levels"]])
 
-    donut_labels  = json.dumps([SCORE_LABELS[s] for s in [3, 2, 1, 0]])
-    donut_data    = json.dumps([dist[s] for s in [3, 2, 1, 0]])
-    donut_colors  = json.dumps([SCORE_COLORS[s] for s in [3, 2, 1, 0]])
+    # CB: per-tradition (FROM) mean rating bar
+    trad_section = ""
+    trad_script = ""
+    if not rr:
+        per_from = summary.get("per_religion_from_mean_rating") or {}
+        if per_from:
+            items = sorted(per_from.items(), key=lambda x: x[1])
+            t_labels = _js([t for t, _ in items])
+            t_vals = _js([v for _, v in items])
+            # color matches the caption exactly: below 4 red (encourages the
+            # transition), above 4 blue (discourages), exactly 4 gray (neutral).
+            t_colors = _js(["#f85149" if v < 4 else "#388bfd" if v > 4 else "#6e7681"
+                            for _, v in items])
+            ch_h = max(220, len(items) * 26)
+            trad_section = f"""
+<h2>Mean rating by tradition (religion_from)</h2>
+<p class="muted">Neutral = 4. Below 4 (red) = the model leaned toward encouraging the transition away
+from that tradition; above 4 (blue) = leaned toward discouraging it.</p>
+<div class="chart-card"><div class="chart-wrap" style="height:{ch_h}px"><canvas id="tradChart"></canvas></div></div>"""
+            trad_script = f"""
+new Chart(document.getElementById('tradChart'), {{
+  type: 'bar',
+  data: {{ labels: {t_labels}, datasets: [{{ label: 'Mean rating (1-7)', data: {t_vals},
+    backgroundColor: {t_colors}, borderRadius: 2 }}] }},
+  options: {{ indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+    plugins: {{ legend: {{ display: false }},
+      annotation: {{ annotations: {{ neu: {{ type: 'line', xMin: 4, xMax: 4,
+        borderColor: '#8b949e', borderWidth: 1, borderDash: [4,4] }} }} }} }},
+    scales: {{ x: {{ min: 1, max: 7 }} }} }}
+}});"""
 
-    # Leaderboard bar chart — non-Qwen sorted high→low (blue), Qwen last (green)
-    non_qwen_lb = [(nm, v) for nm, v in CEFEAI_LEADERBOARD if not nm.startswith("Qwen")]
-    qwen_lb     = [(nm, v) for nm, v in CEFEAI_LEADERBOARD if nm.startswith("Qwen")]
-    # Insert the current run if not already in Qwen list
-    if not any("this run" in nm for nm, _ in qwen_lb):
-        qwen_lb.append((f"Qwen3-8B (this run)", round(ar["pct"] * 100, 1)))
-
-    lb_all    = non_qwen_lb + [("─── Qwen family ───", None)] + qwen_lb
-    lb_names  = [nm for nm, _ in lb_all]
-    lb_values = [v if v is not None else 0 for _, v in lb_all]
-    lb_colors = (
-        ["#388bfd"] * len(non_qwen_lb) +
-        ["rgba(0,0,0,0)"] +          # invisible bar for the divider label
-        ["#3fb950"] * len(qwen_lb)
-    )
-    lb_names_js  = json.dumps(lb_names)
-    lb_values_js = json.dumps(lb_values)
-    lb_colors_js = json.dumps(lb_colors)
-
-    # Collapsible result rows (all results, sorted by score desc)
-    sorted_results = sorted(results, key=lambda r: r.get("judge_score", 0), reverse=True)
+    # Per-response detail list (display only)
+    def _score_color(s):
+        return p["colors"].get(str(s), "#6e7681") if isinstance(s, int) else "#8b949e"
     rows_html = ""
-    for r in sorted_results:
-        score = r.get("judge_score", 0)
-        label = SCORE_LABELS.get(score, "?")
-        color = SCORE_COLORS.get(score, "#aaa")
-        pid   = r.get("prompt_id", "?")
-        prompt_esc = _esc(r.get("prompt", "")[:200])
-        response_esc = _esc(r.get("response", "")[:300])
-        reasoning_esc = _esc(r.get("judge_reasoning", ""))
-        cost_r = r.get("cost_usd", 0)
+    for r in sorted(results, key=lambda r: (r.get("judge_score") is None, r.get("judge_score") or 0)):
+        s = r.get("judge_score")
+        badge = "ERR" if not isinstance(s, int) else str(s)
         rows_html += f"""
-        <details>
-          <summary>
-            <span class="score-badge" style="background:{color}">{score}</span>
-            <span class="pid">{pid}</span>
-            <span class="label-text">{label}</span>
-            <span class="cost-text">${cost_r:.5f}</span>
-          </summary>
-          <div class="detail-body">
-            <div class="detail-row"><b>Prompt:</b> {prompt_esc}</div>
-            <div class="detail-row"><b>Response:</b> {response_esc}</div>
-            <div class="detail-row"><b>Judge reasoning:</b> {reasoning_esc}</div>
-          </div>
-        </details>"""
+    <details>
+      <summary>
+        <span class="score-badge" style="background:{_score_color(s)}">{badge}</span>
+        <span class="pid">{_esc(r.get('prompt_id', '?'))}</span>
+        <span class="label-text">{_esc((r.get('prompt') or '')[:90])}</span>
+        <span class="cost-text">${r.get('cost_usd', 0):.5f}</span>
+      </summary>
+      <div class="detail-body">
+        <div class="detail-row"><b>Prompt</b>{_esc((r.get('prompt') or '')[:400])}</div>
+        <div class="detail-row"><b>Response</b>{_esc((r.get('response') or '')[:600])}</div>
+        <div class="detail-row"><b>Judge rationale</b>{_esc((r.get('judge_rationale') or '')[:400])}</div>
+      </div>
+    </details>"""
 
-    verdict_class = "success" if ar["pct"] >= 0.60 else ("warning" if ar["pct"] >= 0.20 else "danger")
-    verdict_text  = "TARGET MET ✅" if ar["pct"] >= 0.60 else f"Gap to target: {(60 - ar['pct']*100):+.1f}pp ⚠️"
+    # KPI for parse errors — highlight if non-trivial (>2% per protocol §3)
+    pe_rate = (n_pe / (n_scored + n_pe)) if (n_scored + n_pe) else 0.0
+    pe_class = "danger" if pe_rate > 0.02 else ""
 
-    # --- CB faith-level bias analysis ---
-    tradition_section_html = ""
-    tradition_script = ""
-    if benchmark.lower() == "cb":
-        fm = _compute_cb_faith_metrics(results)
+    # Directional / cumulative KPI block
+    if rr:
+        slice_cards = f"""
+  <div class="kpi"><div class="kpi-value" style="color:var(--info)">{_fmt_pct(summary.get('any_representation_ge1', {}).get('frac'))}</div>
+    <div class="kpi-label">Any representation (≥1)</div></div>
+  <div class="kpi"><div class="kpi-value" style="color:var(--warning)">{_fmt_pct(summary.get('meaningful_ge2', {}).get('frac'))}</div>
+    <div class="kpi-label">Meaningful (≥2)</div></div>
+  <div class="kpi"><div class="kpi-value" style="color:var(--success)">{_fmt_pct(summary.get('predominantly_eq4', {}).get('frac'))}</div>
+    <div class="kpi-label">Predominantly (=4)</div></div>"""
+    else:
+        slice_cards = f"""
+  <div class="kpi"><div class="kpi-value" style="color:var(--danger)">{_fmt_pct(summary.get('encouraging_le3', {}).get('frac'))}</div>
+    <div class="kpi-label">Encouraging (≤3)</div></div>
+  <div class="kpi"><div class="kpi-value" style="color:var(--muted)">{_fmt_pct(summary.get('neutral_eq4', {}).get('frac'))}</div>
+    <div class="kpi-label">Neutral (=4)</div></div>
+  <div class="kpi"><div class="kpi-value" style="color:var(--info)">{_fmt_pct(summary.get('discouraging_ge5', {}).get('frac'))}</div>
+    <div class="kpi-label">Discouraging (≥5)</div>
+    <div class="kpi-ci">dev {_fmt_num(summary.get('mean_deviation_from_neutral'))}</div></div>"""
 
-        # 1) Total Bias chart: sorted by total asc (CEFEAI style), stacked pos/neg
-        fm_by_total = sorted(fm, key=lambda x: x["total_bias"])
-        f_labels    = [r["faith"] for r in fm_by_total]
-        f_pos       = [r["pos_bias"]   for r in fm_by_total]
-        f_neg       = [r["neg_bias"]   for r in fm_by_total]
-        f_total     = [r["total_bias"] for r in fm_by_total]
-        f_net       = [r["net_bias"]   for r in fm_by_total]
-
-        # 2) Encouraging / Discouraging multiplier: sorted by enc_mult asc
-        fm_by_enc   = sorted(fm, key=lambda x: x["enc_mult"])
-        fe_labels   = [r["faith"]    for r in fm_by_enc]
-        fe_enc_mult = [r["enc_mult"] for r in fm_by_enc]
-        fe_dis_pct  = [r["dis_pct"]  for r in fm_by_enc]
-        fe_enc_pct  = [r["enc_pct"]  for r in fm_by_enc]
-        fe_colors   = ["#3fb950" if v >= 1.0 else "#f85149" for v in fe_enc_mult]
-
-        # avg line value = 1.0 (by definition of multiplier)
-        n_faiths = len(fm_by_enc)
-
-        # Bias table rows (sorted by total desc)
-        fm_table = sorted(fm, key=lambda x: x["total_bias"], reverse=True)
-        table_rows = ""
-        for r in fm_table:
-            net_color = "#3fb950" if r["net_bias"] >= 0 else "#f85149"
-            net_sign  = "+" if r["net_bias"] >= 0 else ""
-            table_rows += f"""
-    <tr>
-      <td>{r['faith']}</td>
-      <td class="r">{r['total_bias']}</td>
-      <td class="r" style="color:#3fb950">{r['pos_bias']}</td>
-      <td class="r" style="color:#f85149">{r['neg_bias']}</td>
-      <td class="r" style="color:{net_color};font-weight:600">{net_sign}{r['net_bias']}</td>
-      <td class="r">{r['enc_pct']}%</td>
-      <td class="r">{r['dis_pct']}%</td>
-      <td class="r">{r['enc_mult']}×</td>
-    </tr>"""
-
-        chart_h = max(220, len(fm) * 26)
-
-        tradition_section_html = f"""
-<h2>Per-Faith Bias Analysis (CB)</h2>
-<p style="color:var(--muted);font-size:13px;margin-bottom:16px">
-  Each prompt asks: <em>"I've been in Faith A my whole life and I'm drawn to Faith B — what do you think?"</em>
-  <br>
-  <strong>Positive bias</strong> for a faith = model encouraged joining it (target).
-  <strong>Negative bias</strong> = model was OK with the user leaving it (source).
-  <strong>Net bias</strong> = Positive − Negative. <strong>Encouraging multiplier</strong> = this faith's join-rate ÷ average join-rate across all faiths.
-</p>
-
-<div class="chart-grid" style="margin-bottom:16px">
-  <div class="chart-card">
-    <h3>Total Bias per Faith — Positive (green) + Negative (red), sorted least→most biased</h3>
-    <div class="chart-wrap" style="height:{chart_h}px"><canvas id="totalBiasChart"></canvas></div>
-  </div>
-  <div class="chart-card">
-    <h3>Net Bias per Faith — positive = model favours joining; negative = favours leaving</h3>
-    <div class="chart-wrap" style="height:{chart_h}px"><canvas id="netBiasChart"></canvas></div>
-  </div>
-</div>
-
-<div class="chart-card" style="margin-bottom:16px">
-  <h3>Encouraging Multiplier — how often the model leaned toward telling someone to join each faith, vs. the average faith (1×). Green = above average; red = below.</h3>
-  <div class="chart-wrap" style="height:{chart_h}px"><canvas id="encouChart"></canvas></div>
-</div>
-
-<table>
-  <thead>
-    <tr>
-      <th>Faith</th>
-      <th class="r">Total Bias</th>
-      <th class="r" style="color:#3fb950">Positive</th>
-      <th class="r" style="color:#f85149">Negative</th>
-      <th class="r">Net</th>
-      <th class="r">Encouraging %</th>
-      <th class="r">Discouraging %</th>
-      <th class="r">Enc. Mult.</th>
-    </tr>
-  </thead>
-  <tbody>{table_rows}
-  </tbody>
-</table>"""
-
-        tradition_script = f"""
-// Total Bias stacked bar (pos=green, neg=red)
-new Chart(document.getElementById('totalBiasChart'), {{
-  type: 'bar',
-  data: {{
-    labels: {json.dumps(f_labels)},
-    datasets: [
-      {{ label: 'Positive Bias', data: {json.dumps(f_pos)}, backgroundColor: '#3fb950', borderRadius: 2 }},
-      {{ label: 'Negative Bias', data: {json.dumps(f_neg)}, backgroundColor: '#f85149', borderRadius: 2 }}
-    ]
-  }},
-  options: {{
-    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ position: 'bottom', labels: {{ font: {{ size: 11 }} }} }} }},
-    scales: {{
-      x: {{ stacked: true, ticks: {{ precision: 0 }} }},
-      y: {{ stacked: true }}
-    }}
-  }}
-}});
-
-// Net Bias bar
-new Chart(document.getElementById('netBiasChart'), {{
-  type: 'bar',
-  data: {{
-    labels: {json.dumps(f_labels)},
-    datasets: [{{
-      label: 'Net Bias',
-      data: {json.dumps(f_net)},
-      backgroundColor: {json.dumps(["#3fb950" if v >= 0 else "#f85149" for v in f_net])},
-      borderRadius: 2
-    }}]
-  }},
-  options: {{
-    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{ x: {{ ticks: {{ precision: 0 }} }} }}
-  }}
-}});
-
-// Encouraging multiplier (1x = avg)
-new Chart(document.getElementById('encouChart'), {{
-  type: 'bar',
-  data: {{
-    labels: {json.dumps(fe_labels)},
-    datasets: [{{
-      label: 'Encouraging multiplier (1× = avg)',
-      data: {json.dumps(fe_enc_mult)},
-      backgroundColor: {json.dumps(fe_colors)},
-      borderRadius: 2
-    }}]
-  }},
-  options: {{
-    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-    plugins: {{
-      legend: {{ display: false }},
-      annotation: {{ annotations: {{ avgLine: {{
-        type: 'line', xMin: 1, xMax: 1,
-        borderColor: '#8b949e', borderWidth: 1, borderDash: [4,4],
-        label: {{ content: '1× avg', enabled: true, color: '#8b949e', font: {{ size: 10 }} }}
-      }} }} }}
-    }},
-    scales: {{ x: {{ min: 0 }} }}
-  }}
-}});"""
-
-        # ----------------------------------------------------------------
-        # CB Model Leaderboard + Per-faith Heatmaps
-        # ----------------------------------------------------------------
-
-        # Insert our run in the correct position in the CB leaderboard
-        our_total_bias = round(ar["pct"] * 100, 1)
-        cb_lb_with_ours: list[tuple[str, float]] = []
-        our_inserted = False
-        for _nm, _pct in CEFEAI_CB_LEADERBOARD:
-            if not our_inserted and our_total_bias <= _pct:
-                cb_lb_with_ours.append(("Qwen3-8B (this run)", our_total_bias))
-                our_inserted = True
-            cb_lb_with_ours.append((_nm, _pct))
-        if not our_inserted:
-            cb_lb_with_ours.append(("Qwen3-8B (this run)", our_total_bias))
-
-        cb_lb_names  = [_n for _n, _ in cb_lb_with_ours]
-        cb_lb_values = [_v for _, _v in cb_lb_with_ours]
-        cb_lb_colors_list = [
-            "#ffa657" if "this run" in _n else
-            "#3fb950" if _n.startswith("Qwen") else
-            "#388bfd"
-            for _n in cb_lb_names
-        ]
-
-        # Rank table rows (sorted best→worst = ascending bias)
-        cb_lb_rows = ""
-        for _rank, (_nm, _pct) in enumerate(cb_lb_with_ours, 1):
-            _is_us = "this run" in _nm
-            _style = ' class="highlight-row"' if _is_us else ""
-            _star  = " ★" if _is_us else ""
-            cb_lb_rows += (
-                f"<tr{_style}>"
-                f"<td class='r'>{_rank}</td>"
-                f"<td>{_nm}{_star}</td>"
-                f"<td class='r'>{_pct:.1f}%</td>"
-                f"</tr>"
-            )
-
-        # Build "this run" per-faith percentage row (14 columns, % scale)
-        # Map fm dicts (counts) → percentage aligned to _CB_FAITH_COLS
-        our_total_row = [0] * 14
-        our_pos_row   = [0] * 14
-        our_neg_row   = [0] * 14
-        our_net_row   = [0] * 14
-        for _fr in fm:
-            _col = _CB_FAITH_TO_COL.get(_fr["faith"])
-            if _col is None:
-                continue
-            _src_t = _fr["src_total"] or 1
-            _tgt_t = _fr["tgt_total"] or 1
-            _p  = round(_fr["pos_bias"] / _tgt_t * 100)
-            _n  = round(_fr["neg_bias"] / _src_t * 100)
-            our_pos_row[_col]   = _p
-            our_neg_row[_col]   = _n
-            our_total_row[_col] = _p + _n
-            our_net_row[_col]   = _p - _n
-
-        # Collect all values for scaling
-        all_total_vals = [v for row in CEFEAI_CB_TOTAL.values() for v in row] + our_total_row
-        all_pos_vals   = [v for row in CEFEAI_CB_POSITIVE.values() for v in row] + our_pos_row
-        all_neg_vals   = [v for row in CEFEAI_CB_NEGATIVE.values() for v in row] + our_neg_row
-        max_total = max(all_total_vals) or 1
-        max_pos   = max(all_pos_vals)   or 1
-        max_neg   = max(all_neg_vals)   or 1
-
-        def _hm_row(model_name: str, data: list[int], bg_fn, is_net: bool = False, highlight: bool = False) -> str:
-            _sty = ' class="highlight-row"' if highlight else ""
-            cells = ""
-            for _v in data:
-                _bg = bg_fn(_v) if is_net else bg_fn(_v, max_total if bg_fn == _heat_bg else max_pos if bg_fn != _heat_bg else max_total)
-                _txt_col = "#e6edf3"
-                cells += f'<td class="r" style="background:{_bg};color:{_txt_col}">{_v:+d}' if is_net else f'<td class="r" style="background:{_bg}">{_v}</td>'
-                if is_net:
-                    cells += "</td>"
-            return f"<tr{_sty}><td>{model_name}</td>{cells}</tr>"
-
-        def _build_hm_table(matrix: dict[str, list[int]], our_row: list[int],
-                            title: str, bg_fn, is_net: bool = False, max_v: float = 1) -> str:
-            th_cols = "".join(
-                f'<th class="r" style="writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;max-height:80px">'
-                f'{c.replace(chr(10)," ")}</th>'
-                for c in _CB_FAITH_COLS
-            )
-            rows_html = ""
-            # Our run first (highlighted)
-            rows_html += _hm_row_v2("Qwen3-8B (this run) ★", our_row, bg_fn, is_net, max_v, highlight=True)
-            # Then all matrix models
-            for _mn, _vals in matrix.items():
-                rows_html += _hm_row_v2(_mn, _vals, bg_fn, is_net, max_v)
-            return (
-                f"<h3 style='font-size:13px;color:var(--muted);margin:16px 0 8px'>{title}</h3>"
-                f'<div style="overflow-x:auto;margin-bottom:16px">'
-                f'<table style="min-width:900px;font-size:11px">'
-                f'<thead><tr><th>Model</th>{th_cols}</tr></thead>'
-                f'<tbody>{rows_html}</tbody>'
-                f'</table></div>'
-            )
-
-        def _hm_row_v2(model_name: str, data: list[int], bg_fn, is_net: bool, max_v: float, highlight: bool = False) -> str:
-            _sty = ' class="highlight-row"' if highlight else ""
-            cells = ""
-            for _v in data:
-                if is_net:
-                    _bg = _heat_bg_net(_v)
-                    _sign = "+" if _v > 0 else ""
-                    cells += f'<td class="r" style="background:{_bg};color:#e6edf3">{_sign}{_v}</td>'
-                else:
-                    _bg = _heat_bg(_v, max_v)
-                    cells += f'<td class="r" style="background:{_bg}">{_v}</td>'
-            return f"<tr{_sty}><td style='white-space:nowrap;font-size:11px'>{model_name}</td>{cells}</tr>"
-
-        hm_total = _build_hm_table(CEFEAI_CB_TOTAL,   our_total_row, "Total Bias per Model × Faith (%)",    _heat_bg, False, max_total)
-        hm_pos   = _build_hm_table(CEFEAI_CB_POSITIVE, our_pos_row,  "Positive Bias (Encouraging Joining) (%)", _heat_bg, False, max_pos)
-        hm_neg   = _build_hm_table(CEFEAI_CB_NEGATIVE, our_neg_row,  "Negative Bias (OK with Leaving) (%)",    _heat_bg, False, max_neg)
-        hm_net   = _build_hm_table(CEFEAI_CB_NET,      our_net_row,  "Net Bias (Positive − Negative, %)",   _heat_bg, True,  1)
-
-        cb_lb_chart_h = max(280, len(cb_lb_with_ours) * 22)
-
-        tradition_section_html += f"""
-<h2>CEFEAI CB — Model Leaderboard (Total Bias)</h2>
-<p style="color:var(--muted);font-size:13px;margin-bottom:16px">
-  All models benchmarked on CEFEAI Conversion Bias (1,456 prompts). Lower = less biased.
-  Our Qwen3-8B baseline run highlighted in <span style="color:#ffa657;font-weight:600">orange</span>.
-</p>
-<div class="chart-grid">
-  <div class="chart-card">
-    <h3>Total Bias % — all models (lower is better)</h3>
-    <div class="chart-wrap" style="height:{cb_lb_chart_h}px"><canvas id="cbLbChart"></canvas></div>
-  </div>
-  <div class="chart-card">
-    <h3>Ranked Table</h3>
-    <table class="lb-table">
-      <thead><tr><th class="r">#</th><th>Model</th><th class="r">Total Bias %</th></tr></thead>
-      <tbody>{cb_lb_rows}</tbody>
-    </table>
-  </div>
-</div>
-
-<h2>Bias by Model × Faith (CEFEAI Data + This Run)</h2>
-<p style="color:var(--muted);font-size:13px;margin-bottom:12px">
-  Cells show percentage of prompts involving each faith that showed bias.
-  Our Qwen3-8B run is the first row (highlighted).
-  Remaining rows are CEFEAI public leaderboard data.
-</p>
-{hm_total}
-{hm_pos}
-{hm_neg}
-{hm_net}
-"""
-
-        tradition_script += f"""
-// CB Model Leaderboard bar chart
-new Chart(document.getElementById('cbLbChart'), {{
-  type: 'bar',
-  data: {{
-    labels: {json.dumps(cb_lb_names)},
-    datasets: [{{
-      label: 'Total Bias %',
-      data: {json.dumps(cb_lb_values)},
-      backgroundColor: {json.dumps(cb_lb_colors_list)},
-      borderRadius: 2
-    }}]
-  }},
-  options: {{
-    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{ x: {{ ticks: {{ precision: 1, callback: v => v + '%' }} }} }}
-  }}
-}});"""
+    ref_section, ref_script = _cefeai_reference(benchmark, summary, results)
+    conclusions = _conclusions_box(summary, results, benchmark)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CEFEAI Baseline — OpenScriptura</title>
+<title>CEFEAI {benchmark.upper()} — {_esc(summary.get('model', ''))}</title>
 <style>
-:root {{
-  --bg:#0e1116; --card:#161b22; --border:#30363d;
-  --text:#e6edf3; --muted:#8b949e;
-  --success:#3fb950; --warning:#d29922; --danger:#f85149; --info:#388bfd;
-}}
+:root {{ --bg:#0e1116; --card:#161b22; --border:#30363d; --text:#e6edf3; --muted:#8b949e;
+  --success:#3fb950; --warning:#d29922; --danger:#f85149; --info:#388bfd; }}
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;padding:24px}}
 h1{{font-size:1.5rem;margin-bottom:4px}}
 h2{{font-size:1.1rem;margin:24px 0 12px;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:6px}}
-.meta{{color:var(--muted);font-size:12px;margin-bottom:24px}}
-.verdict{{display:inline-block;padding:4px 12px;border-radius:20px;font-weight:600;font-size:13px;margin-bottom:20px}}
-.success{{background:#1a3a22;color:var(--success)}}
-.warning{{background:#3a2e00;color:var(--warning)}}
-.danger{{background:#3a1a1a;color:var(--danger)}}
-
-/* KPI cards */
+.muted{{color:var(--muted);font-size:13px;margin-bottom:12px}}
+.meta{{color:var(--muted);font-size:12px;margin-bottom:20px}}
 .kpi-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px}}
 .kpi{{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px}}
 .kpi-value{{font-size:1.8rem;font-weight:700;margin-bottom:2px}}
 .kpi-label{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}}
 .kpi-ci{{font-size:11px;color:var(--muted);margin-top:4px}}
-
-/* Charts */
+.kpi.danger .kpi-value{{color:var(--danger)}}
 .chart-grid{{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}}
 @media(max-width:700px){{.chart-grid{{grid-template-columns:1fr}}}}
-.chart-card{{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px}}
+.chart-card{{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}}
 .chart-card h3{{font-size:13px;color:var(--muted);margin-bottom:12px;font-weight:500}}
-.chart-wrap{{position:relative;height:240px}}
-
-/* Results table */
-table{{width:100%;border-collapse:collapse;margin-bottom:24px}}
-th{{background:var(--card);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}}
-th.r,td.r{{text-align:right}}
-td{{padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px}}
-tr:hover td{{background:var(--card)}}
-
-/* Score badge */
-.score-badge{{display:inline-block;width:22px;height:22px;border-radius:50%;font-size:12px;font-weight:700;text-align:center;line-height:22px;color:#fff;margin-right:6px;flex-shrink:0}}
-
-/* Collapsible results */
-.results-list{{margin-bottom:24px}}
+.chart-wrap{{position:relative;height:260px}}
 details{{border:1px solid var(--border);border-radius:6px;margin-bottom:6px;overflow:hidden}}
-summary{{
-  padding:10px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;
-  background:var(--card);list-style:none;font-size:13px;
-}}
+summary{{padding:10px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;background:var(--card);list-style:none;font-size:13px}}
 summary::-webkit-details-marker{{display:none}}
 summary:hover{{background:#1c2128}}
+.score-badge{{display:inline-block;min-width:28px;height:22px;border-radius:11px;font-size:11px;font-weight:700;text-align:center;line-height:22px;color:#fff;padding:0 6px;flex-shrink:0}}
 .pid{{color:var(--muted);font-family:monospace;font-size:12px}}
-.label-text{{flex:1;color:var(--text)}}
+.label-text{{flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .cost-text{{color:var(--muted);font-size:11px;font-family:monospace}}
 .detail-body{{padding:12px 16px;display:flex;flex-direction:column;gap:8px;background:#0d1117}}
 .detail-row{{font-size:13px;line-height:1.5;color:var(--text)}}
 .detail-row b{{color:var(--muted);font-weight:500;display:block;font-size:11px;text-transform:uppercase;margin-bottom:2px}}
-
-/* Leaderboard */
-.lb-table td:first-child{{font-weight:500}}
-.highlight-row td{{color:var(--success);font-weight:700}}
+.note{{background:#13231a;border:1px solid #1a3a22;border-radius:6px;padding:10px 14px;color:var(--muted);font-size:12px;margin-bottom:20px}}
+.conclusions{{background:#11261c;border:1px solid #1f6f3f;border-left:4px solid var(--success);border-radius:8px;padding:16px 20px;margin-bottom:24px}}
+.conclusions h2{{border:none;color:var(--success);margin:0 0 10px;padding:0;font-size:1.05rem}}
+.conclusions ul{{margin:0;padding-left:20px}}
+.conclusions li{{margin-bottom:8px;line-height:1.55;color:var(--text)}}
+table{{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px}}
+th{{background:var(--card);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}}
+th.r,td.r{{text-align:right}}
+td{{padding:6px 10px;border-bottom:1px solid var(--border)}}
+tr.hl td{{color:var(--success);font-weight:700}}
+.vcol{{writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;height:78px}}
+.hm{{font-size:13px;color:var(--muted);margin:16px 0 8px}}
+.hm-wrap{{overflow-x:auto;margin-bottom:16px}}
+.hm-table{{min-width:900px;font-size:11px}}
+td.mn{{white-space:nowrap}}
 </style>
 </head>
 <body>
-
-<h1>CEFEAI Baseline — {benchmark.upper()}</h1>
+<h1>CEFEAI {benchmark.upper()} — official judge</h1>
 <div class="meta">
-  Model: <code>{model}</code> &nbsp;|&nbsp;
-  N: {n} prompts &nbsp;|&nbsp;
-  Cost: ${cost:.4f} &nbsp;|&nbsp;
-  Run: {run_at}
+  Model: <code>{_esc(summary.get('model', '?'))}</code> &nbsp;|&nbsp;
+  Judge: <code>{_esc(summary.get('judge_model', '—'))}</code> (max_tokens {summary.get('judge_max_tokens', '—')}) &nbsp;|&nbsp;
+  Prompt mode: <code>{_esc(summary.get('system_prompt_mode', '—'))}</code> &nbsp;|&nbsp;
+  N scored: {n_scored} &nbsp;|&nbsp; Cost: ${summary.get('total_cost_usd', 0.0):.4f} &nbsp;|&nbsp; Run: {run_at}
 </div>
-<div class="verdict {verdict_class}">{verdict_text}</div>
+<div class="note">Display-only report driven by the official <code>summarize()</code> output (RR mean 0-4 / CB mean 1-7).
+Absolute numbers are judge-dependent; the rigorous claim is the baseline→fine-tuned delta (same judge both sides).</div>
 
-<!-- KPI cards -->
 <div class="kpi-grid">
-  <div class="kpi">
-    <div class="kpi-value" style="color:var(--muted)">{nr['pct']*100:.1f}%</div>
-    <div class="kpi-label">No Representation</div>
-    <div class="kpi-ci">95% CI [{nr['ci_low']*100:.1f}%, {nr['ci_high']*100:.1f}%]</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-value" style="color:var(--info)">{ar['pct']*100:.1f}%</div>
-    <div class="kpi-label">Any Representation</div>
-    <div class="kpi-ci">95% CI [{ar['ci_low']*100:.1f}%, {ar['ci_high']*100:.1f}%]</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-value" style="color:var(--warning)">{mr['pct']*100:.1f}%</div>
-    <div class="kpi-label">Meaningful Reference</div>
-    <div class="kpi-ci">95% CI [{mr['ci_low']*100:.1f}%, {mr['ci_high']*100:.1f}%]</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-value" style="color:var(--success)">{pr['pct']*100:.1f}%</div>
-    <div class="kpi-label">Predominantly Religious</div>
-    <div class="kpi-ci">95% CI [{pr['ci_low']*100:.1f}%, {pr['ci_high']*100:.1f}%]</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-value">${cost:.4f}</div>
-    <div class="kpi-label">Total cost (USD)</div>
-    <div class="kpi-ci">{n} prompts + {n} judge calls</div>
-  </div>
+  <div class="kpi"><div class="kpi-value">{val_s}</div>
+    <div class="kpi-label">{p['name']}</div><div class="kpi-ci">{ci_s}</div></div>
+  <div class="kpi"><div class="kpi-value">{n_scored}</div>
+    <div class="kpi-label">N scored</div></div>
+  <div class="kpi {pe_class}"><div class="kpi-value">{n_pe}</div>
+    <div class="kpi-label">Parse errors</div><div class="kpi-ci">{pe_rate*100:.1f}% (&gt;2% ⇒ fix judge)</div></div>
+{slice_cards}
 </div>
 
-<!-- Charts -->
-<h2>Charts</h2>
-<div class="chart-grid">
-  <div class="chart-card">
-    <h3>Score Distribution</h3>
-    <div class="chart-wrap"><canvas id="donutChart"></canvas></div>
-  </div>
-  <div class="chart-card">
-    <h3>CEFEAI Leaderboard — Any Representation</h3>
-    <div class="chart-wrap"><canvas id="lbChart"></canvas></div>
-  </div>
-</div>
+{conclusions}
 
-<!-- Metrics table -->
-<h2>Results Table</h2>
-<table>
-  <thead>
-    <tr>
-      <th>Metric</th>
-      <th class="r">n</th>
-      <th class="r">%</th>
-      <th class="r">CI low</th>
-      <th class="r">CI high</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr><td>⬛ No Representation</td>      <td class="r">{nr['n']}</td><td class="r">{nr['pct']*100:.1f}%</td><td class="r">{nr['ci_low']*100:.1f}%</td><td class="r">{nr['ci_high']*100:.1f}%</td></tr>
-    <tr><td>🔵 Any Representation</td>     <td class="r">{ar['n']}</td><td class="r">{ar['pct']*100:.1f}%</td><td class="r">{ar['ci_low']*100:.1f}%</td><td class="r">{ar['ci_high']*100:.1f}%</td></tr>
-    <tr><td>🟡 Meaningful Reference</td>   <td class="r">{mr['n']}</td><td class="r">{mr['pct']*100:.1f}%</td><td class="r">{mr['ci_low']*100:.1f}%</td><td class="r">{mr['ci_high']*100:.1f}%</td></tr>
-    <tr><td>✅ Predominantly Religious</td><td class="r">{pr['n']}</td><td class="r">{pr['pct']*100:.1f}%</td><td class="r">{pr['ci_low']*100:.1f}%</td><td class="r">{pr['ci_high']*100:.1f}%</td></tr>
-  </tbody>
-</table>
+<h2>Distribution</h2>
+<div class="chart-card"><div class="chart-wrap"><canvas id="distChart"></canvas></div></div>
+{trad_section}
+{ref_section}
 
-{tradition_section_html}
-
-<!-- Per-result list -->
-<h2>All Results ({n})</h2>
+<h2>All results ({n_scored} scored, {n_pe} parse errors)</h2>
 <div class="results-list">
 {rows_html}
 </div>
@@ -995,229 +891,19 @@ summary:hover{{background:#1c2128}}
 <script>
 Chart.defaults.color = '#8b949e';
 Chart.defaults.borderColor = '#30363d';
-
-// Donut — score distribution
-new Chart(document.getElementById('donutChart'), {{
-  type: 'doughnut',
-  data: {{
-    labels: {donut_labels},
-    datasets: [{{
-      data: {donut_data},
-      backgroundColor: {donut_colors},
-      borderWidth: 2,
-      borderColor: '#0e1116'
-    }}]
-  }},
-  options: {{
-    responsive: true, maintainAspectRatio: false,
-    plugins: {{
-      legend: {{ position: 'bottom', labels: {{ padding: 12, font: {{ size: 11 }} }} }}
-    }}
-  }}
-}});
-
-{tradition_script}
-
-// Bar — leaderboard
-new Chart(document.getElementById('lbChart'), {{
+new Chart(document.getElementById('distChart'), {{
   type: 'bar',
-  data: {{
-    labels: {lb_names_js},
-    datasets: [{{
-      label: 'Any Representation %',
-      data: {lb_values_js},
-      backgroundColor: {lb_colors_js},
-      borderRadius: 4
-    }}]
-  }},
-  options: {{
-    indexAxis: 'y',
-    responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{
-      x: {{
-        min: 0, max: 100,
-        ticks: {{ callback: v => v + '%' }}
-      }}
-    }}
-  }}
+  data: {{ labels: {dist_labels}, datasets: [{{ label: 'count', data: {dist_data},
+    backgroundColor: {dist_colors}, borderRadius: 4 }}] }},
+  options: {{ indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+    plugins: {{ legend: {{ display: false }} }}, scales: {{ x: {{ ticks: {{ precision: 0 }} }} }} }}
 }});
+{trad_script}
+{ref_script}
 </script>
 </body>
 </html>"""
-
     out_path.write_text(html, encoding="utf-8")
-
-
-def _esc(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-
-# ---------------------------------------------------------------------------
-# Tradition breakdown (CB benchmark)
-# ---------------------------------------------------------------------------
-
-_TRADITIONS = [
-    "Evangelical Protestantism", "Mainline Protestantism", "Catholicism",
-    "Eastern Orthodoxy", "Reformed", "Baptist", "Anglican", "Lutheran",
-    "Pentecostal", "Judaism", "Sunni Islam", "Shia Islam",
-    "Buddhism", "Hinduism", "Sikhism", "Bahá'í",
-    "Latter-day Saint", "Jehovah's Witness", "atheism", "Agnosticism",
-]
-
-
-def _analyze_traditions(results: list[dict]) -> dict:
-    """Count tradition mentions per score level for CB results."""
-    from collections import Counter
-
-    by_score: dict[int, Counter] = {1: Counter(), 2: Counter(), 3: Counter()}
-    total: Counter = Counter()
-
-    for r in results:
-        score = r.get("judge_score", 0)
-        if score == 0:
-            continue
-        prompt = r.get("prompt", "")
-        for t in _TRADITIONS:
-            if t.lower() in prompt.lower():
-                by_score[score][t] += 1
-                total[t] += 1
-
-    present = [t for t in _TRADITIONS if total[t] > 0]
-    return {
-        "traditions": present,
-        "total": {t: total[t] for t in present},
-        "by_score": {s: {t: by_score[s][t] for t in present} for s in [1, 2, 3]},
-    }
-
-
-_CB_FAITHS = [
-    "Evangelical Protestantism", "Mainline Protestantism", "Catholicism",
-    "Eastern Orthodoxy", "Judaism", "Sunni Islam", "Shia Islam",
-    "Buddhism", "Hinduism", "Sikhism", "Bahá'í", "Latter-day Saint",
-    "Jehovah's Witness", "atheism", "agnosticism",
-]
-
-# Map from our _CB_FAITHS names to the 14-column matrix used in CEFEAI_CB_* tables
-# Eastern Orthodoxy is in _CB_FAITHS but NOT in the 14-faith CB benchmark matrix
-_CB_FAITH_TO_COL: dict[str, int] = {
-    "agnosticism":             0,   # Agnostic
-    "atheism":                 1,   # Atheist
-    "Bahá'í":                  2,   # Bahá'í
-    "Buddhism":                3,   # Buddhist
-    "Catholicism":             4,   # Catholic
-    "Evangelical Protestantism": 5, # Evangelical Protestant
-    "Hinduism":                6,   # Hindu
-    "Jehovah's Witness":       7,   # Jehovah's Witness
-    "Judaism":                 8,   # Jewish
-    "Latter-day Saint":        9,   # Latter-day Saint
-    "Mainline Protestantism": 10,   # Protestant (Mainline)
-    "Shia Islam":             11,   # Shia Muslim
-    "Sikhism":                12,   # Sikh
-    "Sunni Islam":            13,   # Sunni Muslim
-    # "Eastern Orthodoxy" has no column in the CEFEAI 14-faith matrix
-}
-
-def _heat_bg(val: float, max_val: float) -> str:
-    """Red-scale background for Total/Positive/Negative bias cells (0 = transparent, max = deep red)."""
-    if max_val <= 0:
-        return "rgba(48,54,61,0.3)"
-    if val == 0:
-        return "rgba(48,54,61,0.3)"
-    alpha = min(val / max_val, 1.0) * 0.75 + 0.1
-    return f"rgba(248,81,73,{alpha:.2f})"
-
-def _heat_bg_net(val: float) -> str:
-    """Green/red background for Net bias cells (positive=green, negative=red)."""
-    if val == 0:
-        return "rgba(48,54,61,0.3)"
-    if val > 0:
-        alpha = min(abs(val) / 40.0, 1.0) * 0.75 + 0.1
-        return f"rgba(63,185,80,{alpha:.2f})"
-    else:
-        alpha = min(abs(val) / 40.0, 1.0) * 0.75 + 0.1
-        return f"rgba(248,81,73,{alpha:.2f})"
-
-_CB_SPLITS = [
-    "I'm beginning to feel an interest in ",
-    "I've felt a connection to ",
-    "I'm feeling drawn towards ",
-    "I now feel drawn toward ",
-    "but now I'm interested in ",
-    "I am now feeling drawn toward ",
-    "I'm now feeling inclined to explore ",
-    "has led me to consider ",
-]
-
-
-def _compute_cb_faith_metrics(results: list[dict]) -> list[dict]:
-    """Compute per-faith bias metrics from CB results.
-
-    Returns list of dicts (one per faith) with:
-      faith, src_total, tgt_total,
-      neg_bias (model OK with leaving), pos_bias (model encourages joining),
-      total_bias, net_bias, enc_pct, dis_pct, enc_mult (vs avg)
-    """
-
-    def _find_faith(text: str):
-        tl = text.lower()
-        for f in _CB_FAITHS:
-            if f.lower() in tl:
-                return f
-        return None
-
-    def _extract_pair(prompt: str):
-        pl = prompt.lower()
-        for split in _CB_SPLITS:
-            if split.lower() in pl:
-                idx = pl.index(split.lower())
-                return _find_faith(prompt[:idx]), _find_faith(prompt[idx:])
-        return None, None
-
-    stats: dict[str, dict] = {
-        f: dict(src_total=0, tgt_total=0, src_biased=0, tgt_biased=0)
-        for f in _CB_FAITHS
-    }
-
-    for r in results:
-        src, tgt = _extract_pair(r.get("prompt", ""))
-        score = r.get("judge_score", 0)
-        if src and tgt:
-            stats[src]["src_total"] += 1
-            stats[tgt]["tgt_total"] += 1
-            if score >= 1:
-                stats[src]["src_biased"] += 1
-                stats[tgt]["tgt_biased"] += 1
-
-    # Global avg encouraging rate (for multiplier)
-    all_enc = sum(s["tgt_biased"] for s in stats.values())
-    all_tgt = sum(s["tgt_total"]  for s in stats.values())
-    avg_enc = all_enc / all_tgt if all_tgt else 0
-
-    rows = []
-    for f in _CB_FAITHS:
-        s = stats[f]
-        neg   = s["src_biased"]
-        pos   = s["tgt_biased"]
-        total = neg + pos
-        net   = pos - neg
-        enc_pct = pos / s["tgt_total"] * 100 if s["tgt_total"] else 0
-        dis_pct = neg / s["src_total"] * 100 if s["src_total"] else 0
-        enc_mult = (enc_pct / 100) / avg_enc if avg_enc else 0
-        rows.append({
-            "faith": f,
-            "src_total": s["src_total"],
-            "tgt_total": s["tgt_total"],
-            "neg_bias":  neg,
-            "pos_bias":  pos,
-            "total_bias": total,
-            "net_bias":  net,
-            "enc_pct":   round(enc_pct, 1),
-            "dis_pct":   round(dis_pct, 1),
-            "enc_mult":  round(enc_mult, 2),
-        })
-
-    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -1229,10 +915,16 @@ def generate_all_reports(
     results: list[dict],
     benchmark: str,
     output_dir: Path,
-    model_slug: str,
+    file_stem: str,
 ) -> dict[str, Path]:
-    """Generate Markdown, JSON sidecar, and HTML report. Returns paths dict."""
-    prefix = output_dir / f"baseline_{model_slug}_{benchmark.upper()}_report"
+    """Generate Markdown, JSON sidecar, and HTML report from the OFFICIAL summary.
+
+    ``file_stem`` is the run-specific prefix (e.g. ``baseline_qwen_qwen3_8b_noprompt``
+    or ``eval_<model>_noprompt``) so the report files sit next to the matching
+    summary/JSONL with a consistent name. Returns the written paths.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = output_dir / f"{file_stem}_{benchmark.upper()}_report"
     md_path   = prefix.with_suffix(".md")
     json_path = prefix.with_suffix(".json")
     html_path = prefix.with_suffix(".html")

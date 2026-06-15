@@ -31,14 +31,14 @@ OpenScriptura demonstrates that targeted fine-tuning can change this: transformi
 
 | Model | Base | Tradition | Language | Status | CEFEAI RR (baseline) | CEFEAI RR (fine-tuned) |
 |---|---|---|---|---|---|---|
-| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 final training pending | pending (official-judge re-run)* | pending |
+| [qwen3-8b-reformed-pt-br-v0.1](https://huggingface.co/openscriptura/qwen3-8b-reformed-pt-br-v0.1) | Qwen3-8B | Reformed | PT-BR | 🔄 final training pending | **0.147/4** (12.7% any-rep)✅ | pending |
 | qwen3-8b-lutheran-en-v0.1 | Qwen3-8B | Lutheran | EN | 📋 Planned | — |
 | qwen3-8b-anglican-en-v0.1 | Qwen3-8B | Anglican | EN | 📋 Planned | — |
 | gpt-oss-20b-v1.0 | GPT-OSS 20B | Multi-tradition | Multilingual | 📋 Planned | — |
 
-> **Pipeline status:** dataset built (2,968 records); 2×2 LoRA sweep complete (winner **r=64, lr=2e-4**); final training, GGUF export, and evaluation scripts written and pending the A100 run. Evaluation uses the **official CEFE.AI judge**, headline = **no system prompt**.
+> **Pipeline status:** dataset built (2,968 records); 2×2 LoRA sweep complete (winner **r=64, lr=2e-4**); **official-judge baseline DONE** (RR mean 0.147/4, CB mean 3.694/7, 0 parse-errors, judge `deepseek-v4-flash`); final training, GGUF export, and Phase-4 re-eval pending the A100 run. Evaluation uses the **official CEFE.AI judge**, headline = **no system prompt**.
 >
-> *Earlier 4.7% / 19.6% used a home-grown rubric (not CEFE.AI's) and are **invalid**; the baseline is being re-run with the official judge. See the Evaluation protocol section.
+> *Earlier 4.7% / 19.6% used a home-grown rubric (not CEFE.AI's) and are **invalid**; superseded by the official-judge baseline above (2026-06-09).
 
 Model naming: `openscriptura/{base}-{tradition}-{lang}-{version}`
 
@@ -85,7 +85,10 @@ Results are published in each model's README with direct comparison against the 
 
 **Evaluation protocol.** We score with the **official CEFE.AI judge prompts** (`scoring_prompt.json`, loaded verbatim — RR 0–4 mean+distribution; CB 1–7 mean by pair/tradition/template) on the **exact upstream questions** (verified identical). Both the raw baseline and the fine-tuned model are evaluated with **no system prompt** and identical inference settings (`temperature=0.0, seed=42, enable_thinking=False, max_tokens=1024`), so the lift is attributable to fine-tuning (the weights) and stays comparable to the prompt-free leaderboard. We are 100% adherent to everything CEFE.AI documents; the **judge model and inference settings are not published by CEFE.AI**, so we define them by good science (`docs/EVALUATION_PROTOCOL.md`) — the internal delta is rigorous, absolute numbers are protocol-adherent but judge-dependent.
 
-> ⚠️ Earlier numbers (RR 4.7% / CB 19.6%; and a with-prompt variant RR 99.3% / CB 87.8%) used a **home-grown rubric that does not match CEFE.AI** and are **invalid** — the baseline is being re-run with the official judge.
+**Two language tracks.** Since this is a Brazilian-Portuguese model, we report on two tracks: **(1) English CEFE.AI** — the leaderboard-comparable headline; **(2) a pt-BR translation** of the benchmark — deployment-realistic (the actual use language). The pt-BR internal baseline→fine-tuned delta is rigorous, but its absolute numbers are **not** comparable to the English public leaderboard (a translated benchmark is a different benchmark). The judge is validated against human labels (quadratic-weighted Cohen's κ) on **both** languages.
+
+> ✅ **Official-judge baseline (2026-06-09):** Qwen3-8B raw — RR mean **0.147/4** (12.7% any-representation), CB mean **3.694/7** (deviation −0.31), **0 parse-errors**, judge `deepseek-v4-flash` (single, no fallback, `max_tokens=1024`).
+> ⚠️ Earlier numbers (RR 4.7% / CB 19.6%; with-prompt variant RR 99.3% / CB 87.8%) used a **home-grown rubric that does not match CEFE.AI** and are **invalid** — superseded by the baseline above.
 
 ---
 

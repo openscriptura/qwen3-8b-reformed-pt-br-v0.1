@@ -70,9 +70,14 @@ def load_scoring_prompt(benchmark: str) -> dict:
 def build_judge_prompt(benchmark: str, **values) -> str:
     """Render the official judge template by substituting its input_variables.
 
-    Uses literal string replacement (NOT str.format) on purpose: the RR template
-    embeds literal JSON braces (its output-format example), which str.format would
+    Uses literal substitution (NOT str.format) on purpose: the RR template embeds
+    literal JSON braces (its output-format example), which str.format would
     misinterpret. We replace each declared `{var}` and leave all other braces intact.
+
+    SINGLE-PASS substitution: a value that happens to contain another declared token
+    (e.g. a `question` literally containing the text `{response}`) must NOT be
+    re-substituted on a later pass. For real CEFE.AI inputs this is identical to the
+    old sequential .replace; it only differs in that pathological case (correct here).
     """
     cfg = load_scoring_prompt(benchmark)
     template = cfg["template"]
@@ -82,8 +87,9 @@ def build_judge_prompt(benchmark: str, **values) -> str:
                 f"{benchmark.upper()} judge requires input variable {var!r} "
                 f"(expected: {cfg['input_variables']})."
             )
-        template = template.replace("{" + var + "}", str(values[var]))
-    return template
+    tokens = {"{" + var + "}": str(values[var]) for var in cfg["input_variables"]}
+    pattern = re.compile("|".join(re.escape(t) for t in tokens))
+    return pattern.sub(lambda m: tokens[m.group(0)], template)   # function repl → no backref expansion
 
 
 def parse_judge_score(benchmark: str, raw: str) -> tuple[int | None, str]:
@@ -204,12 +210,41 @@ def mean_ci(values: list[int], alpha: float = 0.05) -> dict:
 # Aggregation — exactly the slices CEFE.AI's READMEs prescribe
 # ---------------------------------------------------------------------------
 
+def dedup_records(records: list[dict]) -> list[dict]:
+    """Collapse to one record per ``prompt_id``: prefer a valid integer
+    ``judge_score``, else keep the latest seen.
+
+    A re-judged parse-error prompt appears twice in ``existing + new`` (the stale
+    ``None`` record and the fresh scored one); without this, ``summarize()`` would
+    count BOTH — inflating ``n_parse_error`` and double-listing the prompt in the
+    report. Dropping the stale ``None`` keeps the headline counts honest. Records
+    lacking a ``prompt_id`` are passed through unchanged.
+    """
+    by_id: dict[str, dict] = {}
+    passthrough: list[dict] = []
+    for r in records:
+        pid = r.get("prompt_id")
+        if pid is None:
+            passthrough.append(r)
+            continue
+        prev = by_id.get(pid)
+        prev_valid = prev is not None and isinstance(prev.get("judge_score"), int)
+        new_valid = isinstance(r.get("judge_score"), int)
+        # Keep the new record UNLESS it would replace a valid score with an invalid
+        # one. So: valid is sticky; among equal validity the latest wins (incl.
+        # None→None, matching the "keep latest" contract).
+        if prev is None or new_valid or not prev_valid:
+            by_id[pid] = r
+    return list(by_id.values()) + passthrough
+
+
 def summarize(benchmark: str, results: list[dict], model_label: str) -> dict:
     """Aggregate per-response judge scores into a CEFE.AI-faithful summary.
 
     `results` records must have integer `judge_score` (or None on parse error);
     CB records must also carry `pair_id`. Parse errors are excluded from metrics
-    and reported as `n_parse_error`.
+    and reported as `n_parse_error`. Callers should pass records already deduped by
+    `dedup_records()` so a re-judged prompt is not double-counted.
     """
     b = benchmark.lower()
     scored = [r for r in results if isinstance(r.get("judge_score"), int)]

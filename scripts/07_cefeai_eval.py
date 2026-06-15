@@ -48,6 +48,7 @@ from utils.api_client import OpenRouterClient
 from utils.cefeai import (
     build_judge_prompt,
     compare_summaries,
+    dedup_records,
     format_console_summary,
     load_scoring_prompt,
     load_system_prompt,
@@ -59,6 +60,7 @@ from utils.cefeai import (
 from utils.cost_tracker import CostLimitExceeded, CostTracker
 from utils.logger import get_logger
 from utils.progress import ProgressBar
+from utils.report import generate_all_reports
 
 # ---------------------------------------------------------------------------
 # CEFEAI comparability lock — NEVER change these between Phase 0 and Phase 4
@@ -68,7 +70,11 @@ ENABLE_THINKING = False   # Qwen3: disable <think> tokens (M2)
 TEMPERATURE     = 0.0     # greedy decoding — must match baseline
 MAX_NEW_TOKENS  = 1024    # must match baseline (00); headroom to avoid truncation bias
 SEED            = 42      # torch seed for reproducibility
-JUDGE_MAX_TOKENS = 256    # short verdict; matches baseline judge
+JUDGE_MAX_TOKENS = 1024   # DeepSeek-v4 reasons on some OpenRouter providers; reasoning tokens
+                          # count against max_tokens and 256 caused content=null parse errors.
+                          # 1024 is safe for the chosen `flash` judge (≤842 reasoning tok); pro
+                          # reasons up to 1178, which is why §1 selects flash. MUST match
+                          # 00_cefeai_baseline.py JUDGE_MAX_TOKENS — comparability.
 JUDGE_ENABLE_THINKING = False  # deterministic; verdict can't be truncated by a think block
 SEMAPHORE_LIMIT = 10      # concurrent judge requests
 
@@ -76,10 +82,12 @@ SEMAPHORE_LIMIT = 10      # concurrent judge requests
 # utils.cefeai, which loads the OFFICIAL CEFE.AI scoring_prompt.json verbatim —
 # so this eval and the Phase 0 baseline score identically, and as CEFE.AI does.
 
-BENCHMARK_FILES: dict[str, Path] = {
-    "rr": PROJECT_ROOT / "data" / "cefeai" / "rr_150.jsonl",
-    "cb": PROJECT_ROOT / "data" / "cefeai" / "cb_1456.jsonl",
-}
+BENCHMARK_BASENAME: dict[str, str] = {"rr": "rr_150", "cb": "cb_1456"}
+LANG_SUFFIX: dict[str, str] = {"en": "", "ptbr": "_ptbr"}   # en=headline; ptbr=secondary track
+
+
+def _benchmark_file(benchmark: str, lang: str) -> Path:
+    return PROJECT_ROOT / "data" / "cefeai" / f"{BENCHMARK_BASENAME[benchmark]}{LANG_SUFFIX[lang]}.jsonl"
 RESULTS_DIR = PROJECT_ROOT / "results"
 
 # ---------------------------------------------------------------------------
@@ -233,9 +241,10 @@ async def _judge_one(
             enable_thinking=JUDGE_ENABLE_THINKING,
             log_key=f"{prompt_id}_judge",
         )
-        judge_raw      = api.extract_text(judge_response)
+        judge_raw          = api.extract_text(judge_response)
         judge_score, judge_rationale = parse_judge_score(benchmark, judge_raw)
-        judge_cost     = api.estimate_cost_usd(judge_response, judge_model)
+        judge_model_used   = api.actual_model(judge_response, judge_model)
+        judge_cost         = api.estimate_cost_usd(judge_response, judge_model_used)
         cost_tracker.add(judge_cost)
 
         log.debug("%-12s score=%s  judge_cost=$%.6f  cumulative=$%.4f",
@@ -246,7 +255,7 @@ async def _judge_one(
             "prompt":          prompt_text,
             "model":           model_label,
             "response":        response_text,
-            "judge_model":     judge_model,
+            "judge_model":     judge_model_used,
             "judge_score":     judge_score,        # int on official scale, or None (parse error)
             "judge_rationale": judge_rationale,
             "run_at":          datetime.now(timezone.utc).isoformat(),
@@ -268,16 +277,20 @@ async def _judge_one(
 # ---------------------------------------------------------------------------
 
 def _load_processed_ids(results_file: Path) -> tuple[set[str], list[dict]]:
+    """Read existing JSONL → (processed prompt_ids, deduped records).
+
+    A prompt is "processed" ONLY if it has a valid integer judge_score, so a
+    re-run re-judges parse-error prompts instead of freezing them in (review
+    finding: --resume no-op). Records are deduped by prompt_id keeping the latest
+    valid record so a re-judged prompt's stale None line is not double-counted.
+    This loader is reused for the baseline JSONL in the comparison path, so the
+    same de-dup/exclusion applies on both sides.
+    """
     if not results_file.exists():
         return set(), []
-    ids, records = set(), []
-    with results_file.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rec = json.loads(line)
-                ids.add(rec["prompt_id"])
-                records.append(rec)
+    raw = [json.loads(line) for line in results_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    records = dedup_records(raw)                 # canonical: prefer valid, else latest
+    ids = {r["prompt_id"] for r in records if isinstance(r.get("judge_score"), int)}
     return ids, records
 
 
@@ -308,10 +321,13 @@ async def run_benchmark(
     api_key: str,
     cost_tracker: CostTracker,
     log,
+    lang: str = "en",
 ) -> None:
-    benchmark_file = BENCHMARK_FILES[benchmark]
+    benchmark_file = _benchmark_file(benchmark, lang)
     if not benchmark_file.exists():
         log.error("Benchmark file not found: %s", benchmark_file)
+        if lang != "en":
+            log.error("Run scripts/translate_benchmark.py first to build the pt-BR benchmark.")
         log.error("Download from https://cefe.ai and place at the path above.")
         # Dry-run must stay offline-safe: validate everything else and skip this
         # benchmark instead of hard-exiting (matches 00_cefeai_baseline.py).
@@ -329,15 +345,30 @@ async def run_benchmark(
                 prompts.append(json.loads(line))
     log.info("Loaded %d prompts from %s", len(prompts), benchmark_file.name)
 
+    # Guard: drop empty-`prompt` records (a failed pt-BR translation would be sent
+    # to the model and judged as noise) + verify pt-BR covers the English id set.
+    n_empty = sum(1 for p in prompts if not (p.get("prompt") or "").strip())
+    if n_empty:
+        log.warning("⚠  %d prompt(s) are empty (failed translation?) — dropped from this run.", n_empty)
+        prompts = [p for p in prompts if (p.get("prompt") or "").strip()]
+    if lang != "en":
+        en_ids = {json.loads(l)["id"] for l in _benchmark_file(benchmark, "en").read_text(encoding="utf-8").splitlines() if l.strip()}
+        missing = en_ids - {p["id"] for p in prompts}
+        if missing:
+            log.warning("⚠  pt-BR benchmark missing %d/%d English prompt_ids (e.g. %s) — "
+                        "translate_benchmark.py --resume to complete it.", len(missing), len(en_ids), sorted(missing)[:5])
+
     # Output paths — named differently from baseline to avoid collision.
     # The prompt mode is part of the filename so a with-prompt run and a strict
     # baseline-comparable (no-prompt) run never share a JSONL — critical for
     # both --resume correctness and comparability bookkeeping.
     model_slug  = model_path.name.replace("-", "_").replace("/", "_")
     prompt_mode = "sysprompt" if system_prompt else "noprompt"
+    lang_tag    = "" if lang == "en" else f"{lang}_"
+    file_stem   = f"eval_{model_slug}_{lang_tag}{prompt_mode}"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    results_file = RESULTS_DIR / f"eval_{model_slug}_{prompt_mode}_{benchmark.upper()}.jsonl"
-    summary_file = RESULTS_DIR / f"eval_{model_slug}_{prompt_mode}_{benchmark.upper()}_summary.json"
+    results_file = RESULTS_DIR / f"{file_stem}_{benchmark.upper()}.jsonl"
+    summary_file = RESULTS_DIR / f"{file_stem}_{benchmark.upper()}_summary.json"
     log_raw_dir  = PROJECT_ROOT / "logs" / "raw" / f"eval_{benchmark}_{datetime.now().strftime('%Y%m%d')}"
 
     # Resume
@@ -350,8 +381,18 @@ async def run_benchmark(
             if not dry_run:
                 sys.exit(1)
             log.warning("[DRY-RUN] (a real run would abort here until the stale file is removed)")
+        n_parse_pending = sum(1 for p in prompts if p["id"] not in processed_ids and
+                              any(r["prompt_id"] == p["id"] for r in existing_results))
         if processed_ids:
-            log.info("Resuming: %d prompts already done.", len(processed_ids))
+            log.info("Resuming: %d prompts already scored.", len(processed_ids))
+        if n_parse_pending:
+            log.warning("%d previously-parse-error prompts will be RE-JUDGED under the current "
+                        "judge settings (stale records dropped from the aggregate).", n_parse_pending)
+    elif not dry_run and results_file.exists():
+        # --no-resume = start fresh: truncate so re-judged prompts are not appended
+        # next to stale records (double-count in summary vs paired test — finding).
+        log.warning("--no-resume: discarding existing %s and starting from scratch.", results_file.name)
+        results_file.unlink()
 
     remaining = [p for p in prompts if p["id"] not in processed_ids]
     log.info("%d prompts remaining.", len(remaining))
@@ -417,10 +458,25 @@ async def run_benchmark(
         progress.done()
 
     # --- Summary (CEFE.AI-faithful aggregation from utils.cefeai) ---
-    all_results = existing_results + new_results
+    # Dedup so a re-judged parse-error prompt is counted once; rewrite canonical.
+    union_results = existing_results + new_results
+    all_results = dedup_records(union_results)
+    # Atomic rewrite (temp + os.replace) so a crash mid-write can't destroy the run.
+    tmp_file = results_file.with_suffix(results_file.suffix + ".tmp")
+    with tmp_file.open("w", encoding="utf-8") as fh:
+        for r in all_results:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_file, results_file)
     summary = summarize(benchmark, all_results, model_label)
     summary["judge_model"]        = judge_model
+    summary["total_cost_usd"]     = round(sum(r.get("cost_usd", 0.0) for r in union_results), 6)
+    summary["judge_models_served"] = sorted({r.get("judge_model") for r in all_results if r.get("judge_model")})
+    summary["judge_max_tokens"]   = JUDGE_MAX_TOKENS   # for the cross-run config check below (comparability)
     summary["system_prompt_mode"] = prompt_mode
+    summary["lang"]               = lang                # "en" = comparable; "ptbr" = secondary track
+    summary["run_label"]          = "fine-tuned" if lang == "en" else "fine-tuned (pt-BR)"
     summary["enable_thinking"]    = ENABLE_THINKING
     summary["temperature"]        = TEMPERATURE
     summary["seed"]               = SEED
@@ -431,26 +487,64 @@ async def run_benchmark(
 
     log.info("📄 JSONL   : %s  (%d records)", results_file, len(all_results))
     log.info("📊 Summary : %s", summary_file)
+
+    # Display-only reports (md/json/html) from the OFFICIAL summary. Best-effort.
+    try:
+        paths = generate_all_reports(
+            summary, all_results, benchmark, RESULTS_DIR,
+            file_stem=file_stem,
+        )
+        log.info("📰 HTML    : %s", paths["html"])
+    except Exception as exc:                       # noqa: BLE001 — report is non-critical
+        log.warning("⚠  Report generation failed (metrics are safe in the summary): %s", exc)
+
     if summary["n_parse_error"]:
         log.warning("⚠  %d judge replies failed to parse (excluded from metrics).", summary["n_parse_error"])
 
-    # Compare against the baseline that MATCHES this run's prompt mode (headline =
-    # noprompt). Falls back to the legacy untagged v1 baseline with a caveat.
+    # Compare against the baseline that MATCHES this run's language + prompt mode
+    # (headline = en/noprompt). The legacy untagged fallback applies ONLY to the
+    # English track — a pt-BR eval must never be paired against the English baseline.
     base_slug = "qwen_qwen3_8b"   # OPENROUTER_MODEL_BASELINE = qwen/qwen3-8b
-    tagged_baseline = RESULTS_DIR / f"baseline_{base_slug}_{prompt_mode}_{benchmark.upper()}_summary.json"
-    legacy_baseline = RESULTS_DIR / f"baseline_{base_slug}_{benchmark.upper()}_summary.json"
+    tagged_baseline = RESULTS_DIR / f"baseline_{base_slug}_{lang_tag}{prompt_mode}_{benchmark.upper()}_summary.json"
+    legacy_baseline = (RESULTS_DIR / f"baseline_{base_slug}_{benchmark.upper()}_summary.json"
+                       if lang == "en" else tagged_baseline)
     matched       = tagged_baseline.exists()
     baseline_file = tagged_baseline if matched else legacy_baseline
     if baseline_file.exists():
         baseline = json.loads(baseline_file.read_text(encoding="utf-8"))
         is_legacy = (not matched) or baseline.get("scale") is None
+        # Comparability guard: the paired delta is only valid if BOTH sides used
+        # the SAME judge model and settings (CLAUDE.md HARD RULE #3). A different
+        # requested judge model or token budget (e.g. a baseline judged at
+        # max_tokens=256 vs this run at 1024) BLOCKS the paired test. A served-
+        # snapshot drift (OpenRouter serving a different dated snapshot of the SAME
+        # requested model between two separately-timed runs) is a softer concern —
+        # it only WARNS (else the guard would over-trigger and refuse almost every
+        # cross-day comparison), so the analyst can judge whether the drift matters.
+        served_now = sorted({r.get("judge_model") for r in all_results if r.get("judge_model")})
+        served_base = baseline.get("judge_models_served")
+        judge_mismatch = (not is_legacy) and (
+            baseline.get("judge_model") != judge_model
+            or baseline.get("judge_max_tokens") != JUDGE_MAX_TOKENS
+        )
+        served_drift = (not is_legacy) and (served_base is not None) and (served_base != served_now)
         log.info("=" * 64)
         log.info("  CEFEAI %s — fine-tuned vs baseline (official metric)", benchmark.upper())
         log.info("%s", compare_summaries(benchmark, baseline, summary))
+        if judge_mismatch:
+            log.warning("  ⚠  Judge config differs from the baseline — paired test SKIPPED (not comparable):")
+            log.warning("     baseline judge=%s max_tokens=%s  vs  this run judge=%s max_tokens=%s",
+                        baseline.get("judge_model"), baseline.get("judge_max_tokens"),
+                        judge_model, JUDGE_MAX_TOKENS)
+            log.warning("     Re-run 00_cefeai_baseline.py under the current judge config (use --no-resume), then re-compare.")
+        elif served_drift:
+            log.warning("  ⚠  Same requested judge+budget, but the SERVED snapshot differs "
+                        "(baseline %s vs this run %s) — paired test STILL RUNS; note the snapshot drift.",
+                        served_base, served_now)
         # Paired significance test on per-prompt scores (same prompts both models),
-        # but ONLY against a same-scale (official-judge) baseline — never the legacy rubric.
+        # but ONLY against a same-scale (official-judge), same-judge-config baseline.
         baseline_jsonl = baseline_file.with_name(baseline_file.name.replace("_summary.json", ".jsonl"))
-        if not is_legacy and baseline_jsonl.exists():
+        if not is_legacy and not judge_mismatch and baseline_jsonl.exists():
             _, baseline_records = _load_processed_ids(baseline_jsonl)
             pc = paired_comparison(benchmark, baseline_records, all_results)
             ci = pc["mean_delta_ci"]
@@ -499,6 +593,10 @@ Examples:
                         help="Path to merged model or PEFT adapter directory")
     parser.add_argument("--benchmark", choices=["rr", "cb", "both"], default="both",
                         help="CEFEAI benchmark to run (default: both)")
+    parser.add_argument("--lang", choices=["en", "ptbr"], default="en",
+                        help="en (default) = English CEFE.AI, leaderboard-comparable HEADLINE; "
+                             "ptbr = translated SECONDARY track (NOT leaderboard-comparable). "
+                             "Must match the baseline's language for the paired comparison.")
     parser.add_argument("--system-prompt", dest="use_system_prompt", action="store_true", default=False,
                         help="v2 deployment-behavior eval (WITH the Reformed system prompt). "
                              "NOT CEFEAI-comparable (the prompt saturates the metric). "
@@ -543,7 +641,7 @@ Examples:
     print("=" * 64)
     print(f"  Model path    : {model_path}")
     print(f"  System prompt : {'yes (v2 deployment-behavior — NOT comparable)' if use_system_prompt else 'no (v1 — headline, CEFEAI-comparable)'}")
-    print(f"  Judge         : {judge}")
+    print(f"  Judge         : {judge}  (single judge — no cross-model fallback, comparability lock)")
     print(f"  Benchmarks    : {args.benchmark.upper()}")
     print(f"  Temperature   : {TEMPERATURE}  Seed: {SEED}  Thinking: {ENABLE_THINKING}")
     print(f"  Cost limit    : ${cost_limit:.2f}")
@@ -585,6 +683,7 @@ Examples:
                 api_key=api_key,
                 cost_tracker=cost_tracker,
                 log=log,
+                lang=args.lang,
             )
         )
 
