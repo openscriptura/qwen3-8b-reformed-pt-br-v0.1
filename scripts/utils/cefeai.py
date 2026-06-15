@@ -1,0 +1,442 @@
+"""
+cefeai.py — shared CEFEAI (AllFaith Benchmark) primitives.
+
+The judge prompts are **NOT hardcoded here**. They are loaded VERBATIM at runtime
+from the official CEFE.AI files vendored in `configs/cefeai/`:
+
+  - configs/cefeai/rr_scoring_prompt.json  (AFB_ReligiousRepresentation_v.1_2Q26)
+  - configs/cefeai/cb_scoring_prompt.json  (AFB_ConversionBias_v.2_2Q26)
+
+so it is auditable that OpenScriptura scores EXACTLY as CEFE.AI prescribes. Both
+the Phase 0 baseline (00_cefeai_baseline.py) and the Phase 4 eval
+(07_cefeai_eval.py) import these helpers, so the two sides of the comparison can
+never drift, and neither can drift from upstream.
+
+Scales (from the official scoring_prompt.json files):
+  - RR: judge returns JSON {"rationale": str, "score": <int 0-4>}.
+        Aggregate (per upstream README) = mean score (0-4) + score distribution.
+  - CB: judge returns "Rating: <int 1-7>" (neutral = 4), per (religion_from →
+        religion_to) transition. Aggregate = mean rating + per-pair_id mean;
+        distance from 4 = directional bias.
+
+Neither benchmark defines a single leaderboard scalar upstream; we therefore
+report exactly the slices CEFE.AI recommends (mean + distribution) and never
+invent a headline number.
+"""
+
+import json
+import math
+import re
+from collections import defaultdict
+from pathlib import Path
+
+# Repo root, resolved from this file (scripts/utils/cefeai.py → repo root).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+_SYSTEM_PROMPT_FILE = _PROJECT_ROOT / "configs" / "system_prompt.txt"
+
+_SCORING_FILES = {
+    "rr": _PROJECT_ROOT / "configs" / "cefeai" / "rr_scoring_prompt.json",
+    "cb": _PROJECT_ROOT / "configs" / "cefeai" / "cb_scoring_prompt.json",
+}
+
+# ---------------------------------------------------------------------------
+# Official judge prompts — loaded from the vendored CEFE.AI JSON (never hardcoded)
+# ---------------------------------------------------------------------------
+
+_scoring_cache: dict[str, dict] = {}
+
+
+def load_scoring_prompt(benchmark: str) -> dict:
+    """Return the official CEFE.AI scoring_prompt.json for 'rr' or 'cb' (cached)."""
+    b = benchmark.lower()
+    if b not in _SCORING_FILES:
+        raise ValueError(f"Unknown benchmark {benchmark!r}; expected 'rr' or 'cb'.")
+    if b not in _scoring_cache:
+        path = _SCORING_FILES[b]
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Official CEFE.AI scoring prompt not found at {path}. "
+                "Restore it from the upstream repo (see configs/cefeai/README.md)."
+            )
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        for key in ("template", "input_variables", "output_format"):
+            if key not in cfg:
+                raise ValueError(f"{path} is missing required field '{key}'.")
+        _scoring_cache[b] = cfg
+    return _scoring_cache[b]
+
+
+def build_judge_prompt(benchmark: str, **values) -> str:
+    """Render the official judge template by substituting its input_variables.
+
+    Uses literal substitution (NOT str.format) on purpose: the RR template embeds
+    literal JSON braces (its output-format example), which str.format would
+    misinterpret. We replace each declared `{var}` and leave all other braces intact.
+
+    SINGLE-PASS substitution: a value that happens to contain another declared token
+    (e.g. a `question` literally containing the text `{response}`) must NOT be
+    re-substituted on a later pass. For real CEFE.AI inputs this is identical to the
+    old sequential .replace; it only differs in that pathological case (correct here).
+    """
+    cfg = load_scoring_prompt(benchmark)
+    template = cfg["template"]
+    for var in cfg["input_variables"]:
+        if var not in values:
+            raise KeyError(
+                f"{benchmark.upper()} judge requires input variable {var!r} "
+                f"(expected: {cfg['input_variables']})."
+            )
+    tokens = {"{" + var + "}": str(values[var]) for var in cfg["input_variables"]}
+    pattern = re.compile("|".join(re.escape(t) for t in tokens))
+    return pattern.sub(lambda m: tokens[m.group(0)], template)   # function repl → no backref expansion
+
+
+def parse_judge_score(benchmark: str, raw: str) -> tuple[int | None, str]:
+    """Parse a judge reply into (score, rationale) per the official output_format.
+
+    Returns (None, reason) for unparseable or out-of-range output. Callers MUST
+    treat None as a parse error (count it separately) — never coerce it to a
+    number, which would silently bias the aggregate.
+    """
+    cfg = load_scoring_prompt(benchmark)
+    of = cfg.get("output_format", {})
+    valid = set(of.get("valid_ratings", []))
+
+    content = raw or ""
+    if "<think>" in content and "</think>" in content:   # strip judge thinking
+        content = content.split("</think>", 1)[-1]
+    content = content.strip()
+
+    # CB: apply the OFFICIAL regex from the scoring_prompt.json verbatim
+    # (e.g. ^Rating:\s*([1-7])\s*$). re.MULTILINE so the required "Rating: <d>"
+    # line is found even if the judge emits reasoning on preceding lines; the
+    # line itself must match CEFE.AI's exact format. This is their parser, not ours.
+    rgx = of.get("regex")
+    if rgx:
+        m = re.search(rgx, content, flags=re.MULTILINE)
+        if not m:
+            return None, f"[parse-error] {raw[:120]}"
+        v = int(m.group(1))
+        if valid and v not in valid:   # regex already constrains the range; double-check
+            return None, f"[out-of-range:{v}] {raw[:100]}"
+        return v, ""
+
+    # RR (json output): {"rationale": ..., "score": <int>}
+    c = content
+    if c.startswith("```"):
+        c = c.split("```")[1]
+        if c.lstrip().lower().startswith("json"):
+            c = c.lstrip()[4:]
+        c = c.strip()
+    try:
+        start, end = c.find("{"), c.rfind("}")
+        obj = json.loads(c[start:end + 1] if start != -1 and end != -1 else c)
+        v = int(obj["score"])
+        rationale = str(obj.get("rationale", ""))
+        if valid and v not in valid:
+            return None, f"[out-of-range:{v}] {raw[:100]}"
+        return v, rationale
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return None, f"[parse-error] {raw[:120]}"
+
+
+# ---------------------------------------------------------------------------
+# System prompt (committed, single source of truth) — used only by the v2
+# deployment-behavior mode, NEVER by the CEFEAI-comparable headline runs.
+# ---------------------------------------------------------------------------
+
+def load_system_prompt() -> str:
+    """Return the canonical Reformed system prompt from configs/system_prompt.txt."""
+    _regen_hint = (
+        "Regenerate it from the training data, e.g.:\n"
+        "  python -c \"import json,pathlib; "
+        "r=json.loads(open('data/merged/train.jsonl',encoding='utf-8').readline()); "
+        "p=next(m['content'] for m in r['messages'] if m['role']=='system'); "
+        "pathlib.Path('configs/system_prompt.txt').write_text(p,encoding='utf-8')\""
+    )
+    if not _SYSTEM_PROMPT_FILE.exists():
+        raise FileNotFoundError(f"Canonical system prompt not found at {_SYSTEM_PROMPT_FILE}. " + _regen_hint)
+    prompt = _SYSTEM_PROMPT_FILE.read_text(encoding="utf-8").strip()
+    if not prompt:
+        raise FileNotFoundError(f"Canonical system prompt at {_SYSTEM_PROMPT_FILE} is empty. " + _regen_hint)
+    return prompt
+
+
+# ---------------------------------------------------------------------------
+# Statistics
+# ---------------------------------------------------------------------------
+
+def wilson_ci(n_success: int, n_total: int, alpha: float = 0.05) -> tuple[float, float]:
+    """Wilson score confidence interval — accurate near p=0 and p=1 (M8)."""
+    if n_total == 0:
+        return 0.0, 0.0
+    from scipy.stats import norm
+    z = norm.ppf(1 - alpha / 2)
+    p = n_success / n_total
+    denom = 1 + z ** 2 / n_total
+    center = (p + z ** 2 / (2 * n_total)) / denom
+    half = z * math.sqrt(p * (1 - p) / n_total + z ** 2 / (4 * n_total ** 2)) / denom
+    return round(max(0.0, center - half), 4), round(min(1.0, center + half), 4)
+
+
+def _frac(count: int, n: int) -> dict:
+    lo, hi = wilson_ci(count, n)
+    return {"n": count, "frac": round(count / n, 4) if n else 0.0, "ci_low": lo, "ci_high": hi}
+
+
+def mean_ci(values: list[int], alpha: float = 0.05) -> dict:
+    """Mean of an ordinal score list with sample SD and a normal-approx 95% CI.
+
+    The primary CEFE.AI metric is the MEAN (RR mean score 0-4 / CB mean rating
+    1-7); good practice reports a confidence interval on it, not just the point.
+    n is large here (RR=150, CB=1456) so the normal approximation is sound.
+    """
+    n = len(values)
+    if n == 0:
+        return {"mean": None, "sd": None, "ci_low": None, "ci_high": None, "n": 0}
+    m = sum(values) / n
+    if n == 1:
+        return {"mean": round(m, 4), "sd": 0.0, "ci_low": round(m, 4), "ci_high": round(m, 4), "n": 1}
+    var = sum((v - m) ** 2 for v in values) / (n - 1)
+    sd = var ** 0.5
+    from scipy.stats import norm
+    half = norm.ppf(1 - alpha / 2) * sd / (n ** 0.5)
+    return {"mean": round(m, 4), "sd": round(sd, 4),
+            "ci_low": round(m - half, 4), "ci_high": round(m + half, 4), "n": n}
+
+
+# ---------------------------------------------------------------------------
+# Aggregation — exactly the slices CEFE.AI's READMEs prescribe
+# ---------------------------------------------------------------------------
+
+def dedup_records(records: list[dict]) -> list[dict]:
+    """Collapse to one record per ``prompt_id``: prefer a valid integer
+    ``judge_score``, else keep the latest seen.
+
+    A re-judged parse-error prompt appears twice in ``existing + new`` (the stale
+    ``None`` record and the fresh scored one); without this, ``summarize()`` would
+    count BOTH — inflating ``n_parse_error`` and double-listing the prompt in the
+    report. Dropping the stale ``None`` keeps the headline counts honest. Records
+    lacking a ``prompt_id`` are passed through unchanged.
+    """
+    by_id: dict[str, dict] = {}
+    passthrough: list[dict] = []
+    for r in records:
+        pid = r.get("prompt_id")
+        if pid is None:
+            passthrough.append(r)
+            continue
+        prev = by_id.get(pid)
+        prev_valid = prev is not None and isinstance(prev.get("judge_score"), int)
+        new_valid = isinstance(r.get("judge_score"), int)
+        # Keep the new record UNLESS it would replace a valid score with an invalid
+        # one. So: valid is sticky; among equal validity the latest wins (incl.
+        # None→None, matching the "keep latest" contract).
+        if prev is None or new_valid or not prev_valid:
+            by_id[pid] = r
+    return list(by_id.values()) + passthrough
+
+
+def summarize(benchmark: str, results: list[dict], model_label: str) -> dict:
+    """Aggregate per-response judge scores into a CEFE.AI-faithful summary.
+
+    `results` records must have integer `judge_score` (or None on parse error);
+    CB records must also carry `pair_id`. Parse errors are excluded from metrics
+    and reported as `n_parse_error`. Callers should pass records already deduped by
+    `dedup_records()` so a re-judged prompt is not double-counted.
+    """
+    b = benchmark.lower()
+    scored = [r for r in results if isinstance(r.get("judge_score"), int)]
+    n = len(scored)
+    n_parse_error = len(results) - n
+    scores = [r["judge_score"] for r in scored]
+    total_cost = round(sum(r.get("cost_usd", 0.0) for r in results), 4)
+
+    base = {
+        "model": model_label,
+        "benchmark": f"CEFEAI_{b.upper()}",
+        "release_id": load_scoring_prompt(b).get("release_id")
+                      or load_scoring_prompt(b).get("benchmark", {}).get("release_id"),
+        "n_scored": n,
+        "n_parse_error": n_parse_error,
+        "total_cost_usd": total_cost,
+    }
+
+    if b == "rr":
+        levels = [0, 1, 2, 3, 4]
+        dist = {str(k): _frac(sum(1 for s in scores if s == k), n) for k in levels}
+        base.update({
+            "scale": "0-4",
+            "mean_score": round(sum(scores) / n, 4) if n else None,   # PRIMARY (CEFE.AI)
+            "mean_score_ci": mean_ci(scores),                         # 95% CI on the mean
+            "distribution": dist,                                     # PRIMARY (CEFE.AI)
+            # auxiliary cumulative slices (transparent; not an upstream scalar):
+            "any_representation_ge1": _frac(sum(1 for s in scores if s >= 1), n),
+            "meaningful_ge2":         _frac(sum(1 for s in scores if s >= 2), n),
+            "predominantly_eq4":      _frac(sum(1 for s in scores if s == 4), n),
+        })
+        return base
+
+    # CB
+    levels = [1, 2, 3, 4, 5, 6, 7]
+    dist = {str(k): _frac(sum(1 for s in scores if s == k), n) for k in levels}
+    devs = [s - 4 for s in scores]            # neutral midpoint = 4
+
+    # CEFE.AI README: "aggregate by pair / tradition / template". Build all three.
+    def _means_by(key: str) -> dict:
+        groups: dict[str, list[int]] = defaultdict(list)
+        for r in scored:
+            groups[r.get(key, "?")].append(r["judge_score"])
+        return {g: round(sum(v) / len(v), 4) for g, v in sorted(groups.items())}
+
+    base.update({
+        "scale": "1-7",
+        "neutral_rating": 4,
+        "mean_rating": round(sum(scores) / n, 4) if n else None,           # PRIMARY
+        "mean_rating_ci": mean_ci(scores),                                 # 95% CI on the mean
+        "mean_deviation_from_neutral": round(sum(devs) / n, 4) if n else None,  # directional: <0 encourages transition, >0 discourages
+        "mean_abs_deviation": round(sum(abs(d) for d in devs) / n, 4) if n else None,  # bias magnitude
+        "distribution": dist,                                              # PRIMARY
+        "encouraging_le3": _frac(sum(1 for s in scores if s <= 3), n),
+        "neutral_eq4":     _frac(sum(1 for s in scores if s == 4), n),
+        "discouraging_ge5": _frac(sum(1 for s in scores if s >= 5), n),
+        "per_pair_mean_rating":         _means_by("pair_id"),       # by pair     (CEFE.AI slice)
+        "per_template_mean_rating":     _means_by("template_id"),   # by template (CEFE.AI slice)
+        "per_religion_from_mean_rating": _means_by("religion_from"),# by tradition (FROM)
+        "per_religion_to_mean_rating":   _means_by("religion_to"),  # by tradition (TO)
+    })
+    return base
+
+
+def format_console_summary(summary: dict) -> str:
+    """Human-readable console block for a summary dict."""
+    b = summary["benchmark"]
+    lines = ["=" * 64, f"  {b}  ·  n={summary['n_scored']}  (parse-errors: {summary['n_parse_error']})",
+             f"  release: {summary.get('release_id')}", "-" * 64]
+    if summary["n_scored"] == 0:
+        # No valid scores (e.g. every judge reply failed to parse) — don't try to
+        # format None means with a sign spec; report the failure plainly.
+        lines.append("  ⚠  No valid judge scores — nothing to aggregate (all parse errors?).")
+        lines.append("=" * 64)
+        return "\n".join(lines)
+    if summary.get("scale") == "0-4":
+        ci = summary.get("mean_score_ci", {})
+        lines.append(f"  MEAN SCORE (0-4): {summary['mean_score']}  95% CI [{ci.get('ci_low')}, {ci.get('ci_high')}]   ← primary CEFE.AI metric")
+        lines.append("  distribution:")
+        for k in ["0", "1", "2", "3", "4"]:
+            d = summary["distribution"][k]
+            lines.append(f"    score {k}: {d['frac']*100:5.1f}%  [{d['ci_low']*100:.1f}, {d['ci_high']*100:.1f}]  n={d['n']}")
+    else:
+        ci = summary.get("mean_rating_ci", {})
+        lines.append(f"  MEAN RATING (1-7, neutral=4): {summary['mean_rating']}  95% CI [{ci.get('ci_low')}, {ci.get('ci_high')}]   ← primary CEFE.AI metric")
+        lines.append(f"  mean deviation from neutral : {summary['mean_deviation_from_neutral']:+}  (<0 encourages transition, >0 discourages)")
+        lines.append(f"  mean |deviation| (bias mag) : {summary['mean_abs_deviation']}")
+        lines.append("  distribution:")
+        for k in ["1", "2", "3", "4", "5", "6", "7"]:
+            d = summary["distribution"][k]
+            lines.append(f"    rating {k}: {d['frac']*100:5.1f}%  n={d['n']}")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
+def results_are_legacy_schema(records: list[dict]) -> bool:
+    """True if any record was written by the OLD (pre-official-CEFE.AI) judge.
+
+    Old records carry 'judge_reasoning' (home-grown 0-3 rubric); the official-judge
+    schema carries 'judge_rationale'. Callers use this to refuse merging stale
+    old-scale scores into the new 0-4 / 1-7 aggregate on --resume.
+    """
+    return any("judge_reasoning" in r and "judge_rationale" not in r for r in records)
+
+
+def compare_summaries(benchmark: str, baseline: dict, current: dict) -> str:
+    """Human-readable baseline → fine-tuned comparison on the official metric."""
+    b = benchmark.lower()
+    if b == "rr":
+        a, c = baseline.get("mean_score"), current.get("mean_score")
+        delta = (c - a) if (a is not None and c is not None) else None
+        return (f"  RR mean score (0-4): baseline {a} → fine-tuned {c}"
+                + (f"  (Δ {delta:+.3f})" if delta is not None else ""))
+    a, c = baseline.get("mean_rating"), current.get("mean_rating")
+    delta = (c - a) if (a is not None and c is not None) else None
+    return (f"  CB mean rating (1-7): baseline {a} → fine-tuned {c}"
+            + (f"  (Δ {delta:+.3f})" if delta is not None else "")
+            + "  [for a Reformed model, directional bias is by-design — interpret, don't grade]")
+
+
+# ---------------------------------------------------------------------------
+# Paired significance test (the benchmark is paired: same prompts, two models)
+# ---------------------------------------------------------------------------
+
+def paired_comparison(benchmark: str, baseline_records: list[dict], eval_records: list[dict]) -> dict:
+    """Paired baseline→fine-tuned test on per-prompt judge scores (matched by prompt_id).
+
+    The benchmark is paired (the SAME prompts are scored under both models), so the
+    correct test is on per-prompt deltas. Uses Wilcoxon signed-rank (ordinal-safe)
+    plus the mean delta with a 95% CI and a sign breakdown. Only valid integer
+    scores present on BOTH sides are paired.
+    """
+    b = {r["prompt_id"]: r["judge_score"] for r in baseline_records if isinstance(r.get("judge_score"), int)}
+    e = {r["prompt_id"]: r["judge_score"] for r in eval_records if isinstance(r.get("judge_score"), int)}
+    ids = sorted(set(b) & set(e))
+    base = [b[i] for i in ids]
+    fine = [e[i] for i in ids]
+    diffs = [f - bb for f, bb in zip(fine, base)]
+    n = len(diffs)
+    metric = "score (0-4)" if benchmark.lower() == "rr" else "rating (1-7)"
+    out = {
+        "metric": metric,
+        "n_pairs": n,
+        "baseline_mean": round(sum(base) / n, 4) if n else None,
+        "fine_tuned_mean": round(sum(fine) / n, 4) if n else None,
+        "mean_delta": round(sum(diffs) / n, 4) if n else None,
+        "mean_delta_ci": mean_ci(diffs),
+        "n_improved": sum(1 for d in diffs if d > 0),
+        "n_worsened": sum(1 for d in diffs if d < 0),
+        "n_tied": sum(1 for d in diffs if d == 0),
+    }
+    nonzero = [d for d in diffs if d != 0]
+    if nonzero:
+        try:
+            from scipy.stats import wilcoxon
+            stat, p = wilcoxon(fine, base, zero_method="wilcox", alternative="two-sided")
+            out["wilcoxon_stat"] = round(float(stat), 4)
+            out["wilcoxon_p"] = float(p)
+        except Exception as exc:                       # pragma: no cover
+            out["wilcoxon_p"] = None
+            out["wilcoxon_note"] = str(exc)
+        # matched-pairs rank-biserial effect size (sign-based, simple & robust)
+        out["rank_biserial"] = round((out["n_improved"] - out["n_worsened"]) / len(nonzero), 4)
+    else:
+        out["wilcoxon_p"] = None
+        out["wilcoxon_note"] = "all paired deltas are zero"
+    return out
+
+
+def quadratic_weighted_kappa(rater_a: list[int], rater_b: list[int],
+                             min_rating: int | None = None, max_rating: int | None = None) -> float:
+    """Quadratic-weighted Cohen's κ for ordinal ratings (judge vs human validation).
+
+    Pass the full official scale (RR 0-4, CB 1-7) via min/max so unused levels are
+    still weighted correctly. Pure Python (no sklearn dependency). κ in [-1, 1];
+    ~0.6+ = substantial agreement, ~0.8+ = near-perfect.
+    """
+    assert len(rater_a) == len(rater_b) and rater_a, "raters must be equal length and non-empty"
+    lo = min_rating if min_rating is not None else min(min(rater_a), min(rater_b))
+    hi = max_rating if max_rating is not None else max(max(rater_a), max(rater_b))
+    ratings = list(range(lo, hi + 1))
+    k = len(ratings)
+    idx = {r: i for i, r in enumerate(ratings)}
+    N = len(rater_a)
+    O = [[0] * k for _ in range(k)]
+    for x, y in zip(rater_a, rater_b):
+        O[idx[x]][idx[y]] += 1
+    denom_w = (k - 1) ** 2 if k > 1 else 1
+    W = [[((i - j) ** 2) / denom_w for j in range(k)] for i in range(k)]
+    row = [sum(O[i]) for i in range(k)]
+    col = [sum(O[i][j] for i in range(k)) for j in range(k)]
+    E = [[row[i] * col[j] / N for j in range(k)] for i in range(k)]
+    num = sum(W[i][j] * O[i][j] for i in range(k) for j in range(k))
+    den = sum(W[i][j] * E[i][j] for i in range(k) for j in range(k))
+    return round(1.0 - num / den, 4) if den else 1.0

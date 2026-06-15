@@ -1,0 +1,710 @@
+# OpenScriptura — Implementation Plan
+> Consenso dos 539 PhDs. Última revisão: 2026-06-15. **Phase 0 baseline DONE (official flash judge)**; Phase 1/2 complete; **Phase 3 DONE (v0.1 trained 2026-06-12, exp_c, ckpt-325) · Phase 4 DONE (EN+pt-BR evaluated — see `docs/PHASE4_RESULTS.md`)**; **v0.1.1 in progress** (Tier A = 57 curated examples fixing TULIP/repetition/over-accommodation found in qualitative probe; retrain pending); **evaluation headline = v1 (no system prompt) — v2 tested and rejected**.
+>
+> **✅ Phase 0 baseline (2026-06-09, official judge, no-prompt):** **EN (CEFE.AI headline):** RR mean **0.1467/4** (any-rep **12.7%**, 9th of 28 public models); CB mean **3.6944/7** (deviation **−0.31**, 79.8% neutral). **pt-BR (secondary, not leaderboard-comparable):** RR mean **0.08/4**; CB mean **3.9107/7** (deviation **−0.09**). Judge `deepseek/deepseek-v4-flash` (single, no fallback, `max_tokens=1024`); **0 parse-errors** on all four runs; cost ≈ $1.13 (EN) + ~$1.1 (pt-BR). EN is the comparable reference for the Phase-4 leaderboard claim; pt-BR is the deployment-truth reference for the pt-BR delta.
+
+---
+
+## ⛔ HARD RULE — CEFEAI comparability is NON-NEGOTIABLE
+
+**WE MUST RESPECT COMPARABILITY WITH CEFE.AI.** The project's entire claim and the leaderboard comparison depend on it. **No fix, refactor, optimization, or "improvement" may break it.** The headline CEFEAI numbers must be produced with: **NO system prompt** (both sides), `temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`, the identical judge/rubric/Wilson-CI from `scripts/utils/cefeai.py`, the unchanged benchmark inputs, and **only the model weights differing** between baseline and fine-tuned. If you think an improvement needs to change any of this: **STOP, ask the user**, and if approved, keep the comparable number, re-run both sides, and label the new one as NOT leaderboard-comparable. Full statement of this rule lives in [`CLAUDE.md`](CLAUDE.md#-hard-rule--cefeai-comparability-is-non-negotiable). The v2 system-prompt experiment is the cautionary tale (see below).
+
+---
+
+## ⚠️ Official CEFE.AI judge — supersedes ALL prior numbers (2026-06-08)
+
+Our original judge was **home-grown** and did **not** match CEFE.AI: RR on a 0–3
+scale (theirs is **0–4**) and CB as a 0–3 "proselytization" rubric (theirs is a
+**1–7** `religion_from→religion_to` scale, neutral=4). **Every number quoted in this
+document below — RR 4.7% / CB 19.6% (v1), RR 99.3% / CB 87.8% (v2) — is therefore
+INVALID** (wrong rubric) and kept only as a historical artifact.
+
+We now vendor the **official** `scoring_prompt.json` files verbatim in
+`configs/cefeai/` and load them at runtime (RR 0–4 JSON; CB 1–7 `^Rating:\s*([1-7])\s*$`).
+Aggregation follows the upstream READMEs (RR mean + distribution; CB mean + by
+pair/template/tradition). The 1,606 questions were verified **identical** to upstream.
+
+**Adherence:** 100% on everything CEFE.AI documents. CEFE.AI does NOT publish the
+**judge model** or **inference settings** — we define those by good science in
+[`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md). So the **internal
+baseline→fine-tuned delta is rigorous**; **absolute** numbers are *protocol-adherent
+but judge-dependent* (not provably identical to their leaderboard until they reply).
+**✅ Done (2026-06-09):** the baseline was re-run with the official judge
+(`deepseek-v4-flash`, no-prompt) — RR mean 0.1467/4, CB mean 3.6944/7, 0 parse-errors.
+The judge model decision (single flash, no cross-model fallback) is recorded in
+`CLAUDE.md` Lesson #18 and `docs/EVALUATION_PROTOCOL.md` §1.
+
+---
+
+## Evaluation protocol — v1 vs v2 (headline = v1, no system prompt)
+
+> The numbers in this section are **old-rubric (invalid)**; they remain because the
+> *no-system-prompt decision* still stands — not on the exact magnitudes, but on the
+> principle that the CEFE.AI leaderboard is prompt-free, so a system prompt isn't comparable.
+
+**TL;DR:** The headline, CEFEAI-comparable protocol is **v1 — NO system prompt, on both the baseline and the fine-tuned model**. We briefly tried "v2" (the same Reformed system prompt on both sides) and *ran it*. The data killed it: the prompt **alone** saturated the *raw* model to **RR 99.3% / CB 87.8%** (old rubric), which is neither comparable to the prompt-free CEFEAI leaderboard nor able to show what fine-tuning added. v2 is retained only as an opt-in (`--system-prompt`) deployment-behavior datapoint.
+
+### The reasoning that led us to try v2
+The deployed model always runs with a Reformed system prompt, so it seemed more "realistic" to evaluate both sides with it (only the weights would differ). The extra cost (~$0.30 re-baseline + ~1 day refactor) seemed worth a deployment-realistic, valid comparison.
+
+### What the v2 baseline run actually showed (2026-06-08)
+Running the v2 baseline (**raw, un-fine-tuned** Qwen3-8B + the Reformed system prompt):
+
+| Benchmark | v1 (no prompt) | v2 (with prompt) |
+|-----------|----------------|------------------|
+| RR — Any Representation | **4.7%** | **99.3%** |
+| RR — Predominantly Religious | 0.0% | 99.3% |
+| CB — Any Bias | **19.6%** | **87.8%** |
+| CB — Strong Bias | 0.0% | 75.8% |
+
+Two fatal problems for using v2 as the headline:
+1. **Not comparable to CEFEAI.** Every leaderboard model (Grok 29.3%, GPT-5.4 17.3%, …) is measured prompt-free. A 99.3% produced by a "be a committed Reformed evangelist (TULIP, Five Solas)" instruction no other model received is not a comparison — it's a different experiment.
+2. **It erases the fine-tuning signal.** If the *raw* model + prompt already scores ~99% / ~88%, the *fine-tuned* model + prompt has no headroom. You cannot measure "fine-tuning improved confessional representation by N points" when the prompt alone maxes the metric.
+
+### The decision
+**Headline / comparable protocol = v1 (no system prompt), both sides.** The fine-tuning lives in the weights, so a no-prompt fine-tuned model should still beat the 4.7% raw baseline — and *that* delta is real, leaderboard-comparable, and isolates the fine-tuning. `00` and `07` **default to no prompt**; `--system-prompt` opts into v2.
+
+- **v1 baseline (4.7% / 19.6%)** = the reference. Preserved and archived (`results/v1_baseline_archive/`).
+- **v2 (99.3% / 87.8%)** = an interesting "what the deployed assistant does with its production prompt" datapoint, clearly labeled NON-comparable. For CB, high bias is the project's stated intent (explicit confessional bias), not a regression.
+
+## Evaluation — two language tracks (English headline + pt-BR product)
+
+> **Rationale (what each track answers, and why keep both): [`docs/EVALUATION_PROTOCOL.md` §6](docs/EVALUATION_PROTOCOL.md#6-dois-tracks-de-idioma--inglês-âncora-científica--pt-br-verdade-de-produto).** TL;DR: **pt-BR = headline de produto** (mede o uso real); **inglês = âncora científica** (comparável ao leaderboard). Os dois, sem trocar.
+
+The deployed model is **Brazilian Portuguese**, but the CEFE.AI leaderboard is **English**. So we run two tracks (`--lang`), with English as the comparable headline:
+
+| Track | Benchmark | Role | Comparable to leaderboard? |
+|-------|-----------|------|----------------------------|
+| **`en` (headline)** | official English CEFE.AI (150 RR / 1456 CB) | **scientific anchor** — the "vs Grok/GPT/…" claim | ✅ Yes |
+| **`ptbr` (secondary)** | `translate_benchmark.py` → `*_ptbr.jsonl` (only the `prompt` is translated; ids/pair/template/`religion_from`/`religion_to` kept verbatim) | **deployment-realistic** — measures the real pt-BR use | ❌ No (translated = different benchmark) |
+
+Both run baseline + fine-tuned with the same single judge (`deepseek-v4-flash`) and locked settings. The **pt-BR internal delta is rigorous** (same translated inputs + same judge both sides); its **absolute** numbers are not leaderboard-comparable. A pt-BR eval pairs ONLY against the pt-BR baseline. The judge is validated by **κ** (`08_judge_validation.py`, blind labeling) on **both** languages — flash is the weaker tier, so the κ justifies the absolute numbers. The report places the run on the public leaderboard ONLY for `en`; the pt-BR report shows its own per-faith analysis with a non-comparability banner. **Workflow:** `translate_benchmark.py` → `00 --lang ptbr` (baseline) → `07 --lang ptbr` (fine-tuned) → `08 … ptbr` (κ).
+
+### What we kept from the v2 effort (net-positive even though v2 lost)
+- `scripts/utils/cefeai.py` — shared judge prompts / `wilson_ci` / `baseline_verdict` / `load_system_prompt`; kills drift between `00` and `07`.
+- `configs/system_prompt.txt` — committed canonical prompt (no gitignored-`data/` dependency); used by the v2 mode and by training.
+- Prompt-mode-tagged output filenames; `07` auto-compares against the matching-mode baseline.
+
+`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512` unchanged throughout.
+
+---
+
+## Vision
+
+**OpenScriptura** is an open-source initiative to fine-tune LLMs for Protestant theology — starting with the Reformed tradition in PT-BR, designed to scale across traditions and languages.
+
+Naming convention: `openscriptura/{base}-{tradition}-{lang}-{version}`  
+First model: `openscriptura/qwen3-8b-reformed-pt-br-v0.1`
+
+---
+
+## Phase 0 — Baseline (Week 1, Day 1–2)
+**Goal:** Establish the Qwen3-8B raw baseline on CEFEAI before any fine-tuning.
+**Status:** 🔲 **Must be re-run with the official judge.** The earlier runs (v1 RR 4.7% / CB 19.6%; v2 RR 99.3% / CB 87.8%) used the **home-grown 0–3 rubric** and are **invalid** for CEFE.AI comparison (see the "Official CEFE.AI judge" banner above). Re-run headline = **v1, no system prompt**, official judge: `python scripts/00_cefeai_baseline.py --benchmark both`.
+
+### Script: `00_cefeai_baseline.py` ✅
+- Run **150 prompts** from CEFEAI Religious Representation benchmark
+- Run **1,456 prompts** from CEFEAI Conversion Bias benchmark
+- Model: `qwen/qwen3-8b` via OpenRouter API
+- Judge: `deepseek/deepseek-v4-flash` (cheap, sufficient)
+- Output: `results/baseline_qwen3_8b_RR.jsonl` + `results/baseline_qwen3_8b_CB.jsonl`
+- Cost: **~$0.29**
+- Time: **~2h**
+
+### Benchmark Input Data (staged at `data/cefeai/`)
+| File | Records | Source | Status |
+|---|---|---|---|
+| `rr_150.jsonl` | 150 | [CEFEAI/allfaith-religious-representation](https://github.com/CEFEAI/allfaith-religious-representation) | ✅ Downloaded |
+| `cb_1456.jsonl` | 1,456 | [CEFEAI/allfaith-conversion-bias](https://github.com/CEFEAI/allfaith-conversion-bias) | ✅ Downloaded |
+
+> Note: CEFEAI GitHub files use field `question`; `00_setup_data.py` renames it to `prompt` on download to match `00_cefeai_baseline.py`'s expected schema.
+
+**Actual baseline — Religious Representation (RR), 2026-06-07):**
+| Metric | Result | 95% CI | n |
+|---|---|---|---|
+| No Representation | **95.3%** | [90.7%, 97.7%] | 143 |
+| Any Representation | **4.7%** | [2.3%, 9.3%] | 7 |
+| Meaningful Reference | **0.0%** | [0.0%, 2.5%] | 0 |
+| Predominantly Religious | **0.0%** | [0.0%, 2.5%] | 0 |
+
+Cost: **$0.0729** · Model: `qwen/qwen3-8b` · N=150
+
+**CEFEAI Leaderboard context (Any Representation — RR):**
+| Model | Score |
+|---|---|
+| Grok 4.20 | 29.3% |
+| Mistral Large | 23.3% |
+| GPT-5.4 | 17.3% |
+| **Qwen3-8B (this run — baseline)** | **4.7%** |
+| Claude Opus 4.7 | 4.0% |
+| Llama 4 Scout | 3.3% |
+
+Gap to v0.1 target (>60% Any Representation): **+55.3 pp**
+
+**Actual baseline — Conversion Bias (CB), 2026-06-07:**
+| Metric | Result | 95% CI | n |
+|---|---|---|---|
+| No Bias | **80.4%** | [78.2%, 82.3%] | 1,170 |
+| Any Bias | **19.6%** | [17.7%, 21.8%] | 286 |
+| Meaningful Bias | **5.2%** | [4.2%, 6.5%] | 76 |
+| Predominantly Religious | **0.0%** | [0.0%, 0.3%] | 0 |
+
+Cost: **$0.7173** · Model: `qwen/qwen3-8b` · N=1,456 (10 originally skipped, recovered via `--resume`)
+
+**Note on Conversion Bias:** OpenScriptura will intentionally score "biased" toward the confessional tradition being evaluated — this is documented as *explicit confessional bias*, not a flaw. The fine-tuned model is expected to show significantly higher "Any Bias" than the 19.6% raw baseline.
+
+---
+
+## Phase 1 — Dataset Construction (Week 1, Day 2–5)
+**Goal:** Build the training corpus across 3 tiers.
+
+### Tier C — Catechisms & Confessions (FREE, no API)
+**Status:** ✅ **Complete** — 839 unique records in `data/tier_c/tier_c.jsonl`
+
+**Script: `01_build_tier_c.py`** ✅
+- Input: Plain-text confessional documents in `data/sources/confessions/`
+- Output: `data/tier_c/tier_c.jsonl` — 839 records; `data/tier_c/manifest.json`
+- Deduplication: exact hash (SHA-256 via `content_hash()`); 3 duplicates removed
+- Cost: **$0**
+
+#### Source Documents
+
+| Document | File | Records | Source | How Obtained |
+|---|---|---|---|---|
+| Westminster Shorter Catechism | `westminster_shorter_catechism.txt` | 106 | IPB / IPCPA | PDF extracted — [ipcpa.org.br](https://ipcpa.org.br/wp-content/uploads/2024/10/Breve_Catecismo_de_Westminster.pdf) |
+| Westminster Larger Catechism | `westminster_larger_catechism.txt` | 193 | IPB / IPCPA | PDF extracted — [ipcpa.org.br](https://ipcpa.org.br/wp-content/uploads/2024/10/Catecismo_Maior_de_Westminster.pdf) |
+| Westminster Confession of Faith 1647 | `wcf_1647.txt` | 173 | IPB / IPCPA | PDF extracted — [ipcpa.org.br](https://ipcpa.org.br/wp-content/uploads/2024/10/A_Confissao_de_Fe_de_Westminster.pdf) |
+| Heidelberg Catechism | `heidelberg_catechism.txt` | 128 | Ligonier PT-BR | Scraped — [pt.ligonier.org](https://pt.ligonier.org/recursos/credos-e-confissoes/o-catecismo-de-heidelberg/) |
+| Canons of Dort | `canons_of_dort.txt` | 87 | Ligonier PT-BR | Scraped — [pt.ligonier.org](https://pt.ligonier.org/recursos/credos-e-confissoes/os-canones-de-dort/) |
+| London Baptist Confession 1689 | `lcf_1689.txt` | 155 | Ligonier PT-BR | Scraped — [pt.ligonier.org](https://pt.ligonier.org/recursos/credos-e-confissoes/a-confissao-de-fe-batista-de-londres-de-1689/) |
+| **Total** | | **842 raw → 839 unique** | | |
+
+> **Translation note:** IPCPA PDFs (WSC, WLC, WCF) use the IPB register — an older but doctrinally accurate Portuguese translation. Ligonier PT-BR sources (Heidelberg, Dort, LCF 1689) are contemporary Brazilian Portuguese. Both accepted; pastoral council review not required for confessional documents.
+
+> **Reproducibility:** Original PDFs preserved at `data/sources/confessions/` alongside extracted `.txt` files. Manifested with SHA-256 in `data/sources/manifest.json`.
+
+### Tier B — Synthetic Data (API-generated)
+**Status:** ✅ **Complete** — 2,129 unique records in `data/tier_b/tier_b.jsonl`
+
+**Script: `02_build_tier_b.py`** ✅
+- Generator: `deepseek/deepseek-v4-flash`
+- Judge/filter: `deepseek/deepseek-v4-flash` (same model — self-grading tradeoff accepted for v0.1)
+- Actual output: **2,129 records** from 1,277/1,277 chunks (180 sources)
+- Quality threshold: ≥ 93/100 · Mean score: **96.1** · Min: **93.0**
+- Acceptance rate: **~54%** (46% rejected below threshold or parse errors)
+- Total cost: **~$3.50** across multiple resume runs
+- Chunk-level checkpointing: `data/tier_b/done_chunks.txt` (1,277 entries)
+
+> **Lesson learned:** Resume mechanism initially used record-level SHA-256 dedup, which failed because `temperature=0.7` generates different content each run. Fixed by adding chunk-level `done_chunks.txt` checkpoint. Chunks are marked done immediately after processing regardless of acceptance.
+
+#### Source Material for Tier B
+
+| Source | Location | Volume | Notes |
+|---|---|---|---|
+| Spurgeon sermons (PT-BR) | `data/sources/spurgeon/` | 105 `.pt-br.md` files + 105 `_avaliacao.json` quality scores | Copied from `pastor-ai` staging; use only those with `quality_score ≥ 93` |
+| Monergismo Reformed ebooks | `data/sources/monergismo/` | 289 PDFs from 34 authors | Source: [monergismo.com](https://monergismo.com) |
+
+##### Authors Excluded from Monergismo Corpus (non-Reformed / off-topic)
+
+| Author | Reason |
+|---|---|
+| John Wesley | Arminian — incompatible theological tradition |
+| Karl Barth | Neo-orthodox — diverges from WCF on election and Scripture |
+| F.A. Hayek | Economist — not a theologian, off-topic |
+| Hermas | Early Church (*Shepherd of Hermas*) — pre-Reformation, not confessionally Reformed |
+| Inácio de Antioquia | Church Father (Ignatius) — patristic, not confessionally Reformed |
+
+> Pastoral council may restore any excluded author after review.
+
+### Tier A — Curated High-Quality (manual review)
+**Status:** ✅ **v0.1.1: 60 examples** in `data/tier_a/tier_a.jsonl` (16 abstention · 17 distinctives · 24 doctrine · 3 TULIP-drill), authored + pastoral-reviewed via the offline HTML review tool (`data/tier_a/review_*.html` → `tier_a_reviewed_*.json` → `scripts/build_tier_a.py`). Decisions: baptism = present both (WCF + 1689); cessationism assumed; amillennial confessional.
+
+> **⚠️ Outcome (2026-06-15): Tier A retrains did NOT fix the 3 target defects — and fine-tune is the wrong tool for them.** Two retrains (Tier A 1.8% → upsampled 12% via `scripts/upsample_tier_a.py`) both failed; upsampling made the TULIP fact *worse* (overfitting → confabulation). A clean 2×2 probe showed the apparent failures were largely an artifact of probing **without the system prompt** (OOD — the model trains with one in 100% of examples). **With the production system prompt, TULIP and over-accommodation are robustly fixed** via `configs/system_prompt_production.txt`; **factual abstention is only inconsistently fixable by prompt → deferred to System B (RAG + citation guardrail).** Decision: **stop fine-tuning these; ship model + production prompt.** Full analysis: `docs/LESSONS.md` #11–14.
+
+- Pastoral review mandatory before inclusion (see `docs/PASTORAL_REVIEW_PROTOCOL.md`)
+- Each example reviewed against WCF > Dort > LCF 1689 confessional hierarchy
+- Includes refusal examples (documented as positive training signal)
+- Target: ~500–1,000 examples
+- Cost: **$0** (human time)
+
+### JSONL Schema (versioned, chat-format)
+
+All training records use this schema. `lang` (BCP 47, short form) and `messages` are the keys used by `content_hash()` in `scripts/utils/hash.py`.
+
+```json
+{
+  "id": "openscriptura-reformed-pt-0001",
+  "version": "1.0",
+  "tradition": "reformed",
+  "lang": "pt-BR",
+  "tier": "C",
+  "source": "wcf",
+  "sha256": "<content_hash over messages+tradition+lang>",
+  "messages": [
+    {"role": "system", "content": "<canonical PT-BR system prompt from THEOLOGICAL_STATEMENT.md>"},
+    {"role": "user",   "content": "<question>"},
+    {"role": "assistant", "content": "<answer>"}
+  ],
+  "confessional_refs": ["WCF 1.1", "WCF 1.4"],
+  "reviewed_by": "auto",
+  "quality_score": null,
+  "created_at": "2026-06-07T00:00:00Z"
+}
+```
+
+> **Key constraint:** use `lang` (not `language`) to match `content_hash()`. Use `messages` (chat-format) not `question`/`answer` fields.
+
+### `manifest.json` structure
+```json
+{
+  "version": "1.0",
+  "created": "2026-06-07",
+  "tradition": "reformed",
+  "lang": "pt",
+  "splits": {
+    "train": {"count": 4500, "sha256": "<hash>"},
+    "val":   {"count": 300,  "sha256": "<hash>"},
+    "test":  {"count": 200,  "sha256": "<hash>"}
+  },
+  "tier_breakdown": {"A": 700, "B": 3500, "C": 800}
+}
+```
+
+---
+
+## Phase 2 — EDA + Controlled Experiments (Week 2)
+**Status:** ✅ **Complete** — all 4 experiments run on vast.ai RTX 4090 (instance 40077545, ~6.5h, ~$3.50). Winner: **exp_c (r=64, lr=2e-4)**. Instance destroyed; adapters + results archived locally in `results/`.
+
+### Phase 2 final results
+
+_Exact `eval_all_loss` read from `results/exp_*_results.json` (2026-06-08):_
+
+| Config | r | α | LR | eval_all_loss | Tier B | Tier C | best step |
+|--------|---|---|----|---------------|--------|--------|-----------|
+| **exp_c** | 64 | 128 | 2e-4 | **0.6527** ✅ | 0.6841 | 0.5728 | 350 |
+| exp_d | 64 | 128 | 1e-4 | 0.6586 | 0.6870 | 0.5858 | 350 |
+| exp_a | 16 | 32 | 2e-4 | 0.6640 | 0.6924 | 0.5910 | 350 |
+| exp_b | 16 | 32 | 1e-4 | 0.6709 | 0.6993 | 0.5990 | 500 |
+
+**Findings (3-panel review of 77 PhDs each):**
+- **Both rank and LR help; rank ~2× the LR effect, but both are small.** Best r=64 (exp_c 0.6527) vs best r=16 (exp_a 0.6640) = Δ**0.011**; LR effect within a rank ≈0.006–0.007. `lr=2e-4` wins in both ranks and `r=64` wins in both LRs, so **exp_c (r=64, lr=2e-4)** is the unambiguous winner. *(An earlier draft cited Δ≈0.04 — that was a data error: exp_b's Tier-B value 0.6993 was mistakenly used as its eval_all_loss; the real exp_b eval_all is 0.6709.)*
+- **exp_c vs exp_d (within r=64) = 0.006** — near the training-noise threshold; exp_d is the safer-stability fallback.
+- **Tier C learns faster than Tier B** (gap ~0.10 in every config) — catechisms are structurally uniform; synthetic Tier B has higher style variance.
+- Best step ≈350 for three configs (exp_b at 500) → the data signal is largely exhausted by ~65% of training; Phase 3 uses early stopping to catch the true optimum.
+
+`configs/final.yaml` encodes the exp_c winner for Phase 3.
+
+### Bugs fixed during Phase 2 (see CLAUDE.md "Lessons Learned" #7–#11)
+flash_attn missing → eager · OOM → batch=1 + grad_accum=16 + gradient_checkpointing · `metric_for_best_model` dict-eval naming · `label_names=[]` suppressing eval loss · `load_best_model_at_end` unsafe with QLoRA · chained-run CUDA OOM → `sleep 30` between configs.
+
+### (Historical) live-run context — instance 40077545 (Denmark RTX 4090, $0.455/hr)
+
+### Script: `03_eda.py` ✅
+- Output: `reports/eda_report.html` + `reports/eda_report.md`
+- Results: 2,968 records · 0 duplicates · 99.5% confessional refs · Tier B mean score 96.1
+
+### Script: `merge_dataset.py` ✅
+- Stratified 95/5 split by tier (seed=42, deterministic)
+- Output: `data/merged/train.jsonl` (2,873) + `data/merged/eval.jsonl` (151)
+- `data/merged/manifest.json` with SHA-256 file hashes
+- **Note:** `data/` is gitignored — must upload to GPU instance manually via `scp`
+
+### 4 Controlled Experiments (2×2 matrix) 🔄
+Run on **vast.ai RTX 4090** ($0.455/hr, Denmark, CUDA 13.1):
+
+| Config | r | α | LR | Est. time | Note |
+|--------|---|---|----|-----------|------|
+| A | 16 | 32 | 2e-4 | ~1.5h | Lower bound |
+| B | 16 | 32 | 1e-4 | ~1.5h | Conservative low-rank |
+| C | 64 | 128 | 2e-4 | ~2.0h | High-rank aggressive |
+| **D** | **64** | **128** | **1e-4** | **~2.0h** | **RECOMMENDED — runs first** |
+
+**Script: `04_experiment.py`** ✅ — YAML-driven, all 4 configs, `--dry-run` + `--resume`
+
+Key design decisions validated by 6×77 PhD panels:
+- `SFTConfig` built directly from YAML (no `TrainingArguments` middleman)
+- Chat template applied upfront → `text` column (not `formatting_func`)
+- `eval_dataset` as dict → logs `eval_B_loss`, `eval_C_loss`, `eval_all_loss` separately
+- Overlong records tokenized + dropped before training (not silently truncated)
+- `prepare_model_for_kbit_training()` handles `enable_input_require_grads()` internally
+
+**vast.ai automation: `scripts/vastai_run_experiments.py`** ✅
+- Search, launch, monitor, destroy instances via CLI
+- `--all-configs` runs D→C→B→A sequentially with `nohup`
+- `--wait` polls until instance reaches `running` status
+
+Cost: ~7h × $0.455 = **~$3.19** (all 4 experiments)
+
+#### vast.ai Instance Setup (required on each new instance)
+```bash
+# Fix bitsandbytes CUDA mismatch (CUDA 12.4 container on CUDA 13.x host):
+ln -sf /usr/local/cuda-12.4/targets/x86_64-linux/lib/libnvJitLink.so.12 \
+       /usr/local/cuda-12.4/targets/x86_64-linux/lib/libnvJitLink.so.13
+echo "/usr/local/cuda-12.4/targets/x86_64-linux/lib" > /etc/ld.so.conf.d/cuda124.conf && ldconfig
+export LD_LIBRARY_PATH=/usr/local/cuda-12.4/targets/x86_64-linux/lib:$LD_LIBRARY_PATH
+
+# Install core deps (skip unsloth for Phase 2):
+pip install transformers==4.51.0 trl==0.12.0 peft==0.13.0 bitsandbytes \
+  datasets==3.2.0 pyyaml==6.0.2 python-dotenv==1.0.1 scipy==1.14.1 \
+  sentencepiece==0.2.0 tokenizers==0.21.0 tenacity==9.0.0 httpx==0.27.0 jsonlines==4.0.0
+
+# Upload data from local machine:
+scp -P <port> -i ~/.ssh/id_rsa data/merged/train.jsonl root@<host>:/workspace/openscriptura/data/merged/
+scp -P <port> -i ~/.ssh/id_rsa data/merged/eval.jsonl  root@<host>:/workspace/openscriptura/data/merged/
+```
+
+---
+
+## Phase 3 — Final Fine-Tuning (Week 2–3)
+**Status:** ✅ **DONE (v0.1, 2026-06-12)** — trained on a rented **H100 80GB** (not A100; eager attention per Lesson #7), exp_c config, early-stopped at the optimum → **best `eval_all_loss` 0.6546 @ checkpoint-325** (≈ Phase 2's 0.6527). Merged via `06_export.py --skip-gguf`. ~17 min train, ~$2–3. _(v0.1.1 retrain pending with Tier A added.)_
+
+**Script: `05_train_final.py`** (config: `configs/final.yaml` = exp_c winner)
+- Platform: **A100 80GB** (vast.ai/RunPod, ~$1.80/hr)
+- **Full bf16 LoRA** (no 4-bit) — A100 has the VRAM; cleaner adapter merge. (`quantization.enabled: true` reverts to QLoRA for smaller GPUs.)
+- r=64, α=128, lr=2e-4, warmup 10% (doubled from Phase 2 for the aggressive LR), 5 epochs
+- **Early stopping** (custom PEFT-safe callback, patience=5) — stops at the real optimum; `eval_steps=25` for fine granularity; `save_total_limit=10` so the best checkpoint survives
+- `max_seq_length=4096` (A100 headroom); effective batch 16 (bs=4 × grad_accum=4)
+- Writes `results.json` recording `best_checkpoint` (the genuinely best step, not the last)
+- Estimated time: ~2–3h · Cost: **~$5**
+
+### Export
+**Script: `06_export.py`** (`--config configs/final.yaml`)
+- Reads `best_checkpoint` from `results.json` (not the last/`final/` state); `--adapter-path` overrides; `--force-merge` re-merges
+- Merge LoRA adapter into base via `peft.merge_and_unload()` (single-GPU pinned)
+- Export GGUF (via llama.cpp) in 3 quantizations: `Q4_K_M` (balanced), `Q5_K_M` (higher quality), `Q8_0` (near lossless)
+- `--push-to-hub` → `openscriptura/qwen3-8b-reformed-pt-br-v0.1` (merged model + `gguf/`)
+- Cost: **~$2** (A100 time for merge + GGUF) · ~1–2h
+
+---
+
+## Phase 4 — Evaluation & Publication (Week 3)
+**Status:** ✅ **DONE (v0.1, 2026-06-12/13)** — both tracks evaluated, comparability lock held (no system prompt, flash judge @1024, same both sides). Headline deltas (full scorecard: `docs/PHASE4_RESULTS.md`):
+- **EN** (leaderboard anchor): RR 0.147→0.227 (Δ+0.08, *n.s.* p=0.15) · CB 3.694→3.499 (**Δ−0.195, p=3.9e-6**); CB Any-Bias 20%→62.7%, neutral 80%→37%.
+- **pt-BR** (product): **RR 0.081→0.617 (Δ+0.537, p=3.7e-6, large effect)** · CB net n.s. but Any-Bias 20%→64.6%, with pro-Protestant directional tilt.
+- Verdict vs plan: **CB confessional goal met/exceeded; RR >60% target missed (best ~21%)**. Publication deferred to v0.1.1 (qualitative probe found defects to fix first).
+
+**Script: `07_cefeai_eval.py`** — local inference (transformers, greedy, `enable_thinking=False`) + OpenRouter judge.
+- **Headline = v1 (no system prompt), default.** `--system-prompt` opts into the v2 deployment-behavior datapoint (not leaderboard-comparable). Compares against the baseline matching its own prompt mode (v1 → the legacy untagged `results/baseline_qwen_qwen3_8b_*` files).
+- Same locked inference settings as the baseline (`temperature=0.0, seed=42, enable_thinking=False, max_tokens=512`); judge prompts / Wilson CI / system prompt shared via `scripts/utils/cefeai.py`.
+- Auto-detects merged model vs PEFT adapter; prints direction-aware verdict (RR up=better, CB down=better).
+- **Run:** `07 --model-path checkpoints/final/merged --benchmark both` (v1 headline vs the v1 baseline). Optionally add `--system-prompt` for the deployment-behavior datapoint.
+
+### Evaluation targets (Religious Representation)
+| Metric | Baseline — Qwen3-8B raw | Target v0.1 | Target v1.0 |
+|---|---|---|---|
+| No Representation | **95.3%** [90.7–97.7%] | ~30–40% | ~15% |
+| Any Representation | **4.7%** [2.3–9.3%] | **~60–70%** | ~80% |
+| Meaningful Reference | **0.0%** [0.0–2.5%] | ~20–30% | ~40% |
+| Predominantly Religious | **0.0%** [0.0–2.5%] | ~5–10% | ~15% |
+
+**Target:** Beat Grok 4.20 (29.3%) by wide margin — v0.1 aims for >60% Any Representation (+55.3 pp lift from baseline).
+
+### Statistical Protocol
+- z-test for proportions (N=150, power > 0.99)
+- Bonferroni correction for multiple comparisons
+- 10 canonical pastoral evaluation questions (qualitative layer)
+- Pastoral review of 50 random outputs before publication
+
+### Publication deliverables
+- HuggingFace Hub: model + dataset + model card
+- arXiv: "OpenScriptura: Open LLMs for Protestant Theology"
+- CEFEAI leaderboard submission (model #29)
+- 4 ablation studies planned post v0.1
+
+---
+
+## Repository Structure
+
+```
+C:\tmp\openScriptura\
+│
+├── README_github.md              ✅ published
+├── README_huggingface.md         ✅ published
+├── IMPLEMENTATION_PLAN.md        ✅ this file (updated 2026-06-08)
+├── CONTRIBUTING.md               ✅ present
+├── LICENSE                       ✅ Apache 2.0
+├── requirements.txt              ✅ pinned (unsloth==2025.3.19)
+│
+├── scripts/
+│   ├── utils/                    ✅ shared infrastructure
+│   │   ├── api_client.py         ✅ OpenRouterClient (retry, cost, think-stripping)
+│   │   ├── cost_tracker.py       ✅ CostTracker (hard stop)
+│   │   ├── hash.py               ✅ content_hash() SHA-256
+│   │   ├── logger.py             ✅ get_logger() (resolves logs/ from project root)
+│   │   ├── progress.py           ✅ ProgressBar (TTY-aware)
+│   │   ├── report.py             ✅ generate_all_reports()
+│   │   └── cefeai.py             ✅ shared judge/Wilson/verdict/system-prompt (protocol v2)
+│   ├── 00_setup_data.py          ✅ data staging + audit
+│   ├── 00_cefeai_baseline.py     ✅ run (v1 4.7%/19.6%); v2 (--system-prompt default) pending
+│   ├── 01_build_tier_c.py        ✅ 839 records produced
+│   ├── 02_build_tier_b.py        ✅ 2,129 records produced
+│   ├── 03_eda.py                 ✅ reports/eda_report.html produced
+│   ├── merge_dataset.py          ✅ train.jsonl (2,873) + eval.jsonl (151)
+│   ├── 04_experiment.py          ✅ QLoRA training, YAML-driven, 4 configs (run)
+│   ├── vastai_run_experiments.py ✅ vast.ai instance automation
+│   ├── 05_train_final.py         ✅ written — full-bf16 LoRA + early stopping (run 🔲)
+│   ├── 06_export.py              ✅ written — merge best ckpt + GGUF Q4/Q5/Q8 (run 🔲)
+│   └── 07_cefeai_eval.py         ✅ written — v2 eval, local infer + judge (run 🔲)
+│
+├── data/  (gitignored — not in repo)
+│   ├── cefeai/
+│   │   ├── rr_150.jsonl          ✅ 150 prompts
+│   │   └── cb_1456.jsonl         ✅ 1,456 prompts
+│   ├── sources/
+│   │   ├── confessions/          ✅ 6 docs (3 PDFs + 6 TXTs)
+│   │   ├── spurgeon/             ✅ 105 PT-BR sermons + quality scores
+│   │   ├── monergismo/           ✅ 289 PDFs / 34 authors (5 excluded)
+│   │   └── manifest.json         ✅ SHA-256 index of all sources
+│   ├── tier_a/                   ⏳ pending pastoral council
+│   ├── tier_b/
+│   │   ├── tier_b.jsonl          ✅ 2,129 records
+│   │   ├── manifest.json         ✅
+│   │   └── done_chunks.txt       ✅ 1,277 chunk checkpoints
+│   ├── tier_c/
+│   │   ├── tier_c.jsonl          ✅ 839 records
+│   │   └── manifest.json         ✅
+│   └── merged/
+│       ├── train.jsonl           ✅ 2,873 records (B:2076 + C:797)
+│       ├── eval.jsonl            ✅ 151 records (B:109 + C:42)
+│       └── manifest.json         ✅ SHA-256 + tier breakdown
+│
+├── configs/
+│   ├── exp_a.yaml                ✅ r=16 lr=2e-4
+│   ├── exp_b.yaml                ✅ r=16 lr=1e-4
+│   ├── exp_c.yaml                ✅ r=64 lr=2e-4 (WINNER)
+│   ├── exp_d.yaml                ✅ r=64 lr=1e-4
+│   ├── final.yaml               ✅ Phase 3 config (exp_c winner, A100 full bf16)
+│   └── system_prompt.txt        ✅ canonical Reformed prompt (committed, single source of truth)
+│
+├── checkpoints/  (gitignored)
+│   ├── exp_a/ exp_b/ exp_c/ exp_d/   ✅ Phase 2 done (archived to results/)
+│   └── final/                    🔲 Phase 3 output (merged/ + gguf/ + results.json)
+│
+├── tests/
+│   ├── test_cost_tracker.py      ✅
+│   └── test_hash.py              ✅
+│
+├── results/                      ✅ baseline results present (RR + CB, 4 files each)
+├── reports/                      ✅ eda_report.html + eda_report.md
+│
+└── docs/
+    ├── THEOLOGICAL_STATEMENT.md  ✅ present
+    ├── PASTORAL_REVIEW_PROTOCOL.md ✅ present
+    ├── METHODOLOGY.md            ⏳ pending
+    ├── ADDING_A_TRADITION.md     ⏳ pending
+    └── ADDING_A_LANGUAGE.md      ⏳ pending
+```
+
+---
+
+## Confessional Hierarchy (Reformed v0.1)
+
+```
+WCF (Westminster Confession of Faith)
+  └── Dort (Canons of Dort)
+       └── LCF 1689 (London Baptist Confession)
+```
+
+The model does NOT blend traditions — a Reformed model speaks Reformed only.
+
+---
+
+## Cost Summary
+
+| Item | Platform | Cost |
+|---|---|---|
+| Phase 0: CEFEAI baseline v1 ✅ | OpenRouter | **$0.7902** (RR $0.0729 + CB $0.7173) |
+| Phase 1: Dataset Tier B ✅ | DeepSeek API | **~$3.50** (actual; planned $1 — 3.5× over budget due to resume issues) |
+| Phase 2: 4 experiments ✅ | Vast.ai RTX 4090 | **~$3.50** (actual: ~6.5h × $0.455/hr + setup) |
+| v2 baseline experiment ✅ (ran, then rejected as headline) | OpenRouter | **~$0.83** (RR $0.074 + CB $0.76) |
+| Phase 3: Final training + export 🔲 | A100 80GB | ~$5–7 (~3–4h × $1.80/hr) |
+| Phase 4: CEFEAI re-eval (v1 headline) 🔲 | OpenRouter (judge only; inference is local/free) | ~$0.30 |
+| Misc | — | ~$0.50 |
+| **Total (one-time)** | | **~$14–17** |
+| HF PRO (demo + ZeroGPU) | HuggingFace | **$9/month** |
+
+> The v2 baseline (~$0.83) was a deliberate experiment that produced a clear negative result (the prompt saturates the metric — see "Evaluation protocol — v1 vs v2"). Cheap insurance: it confirmed v1 is the correct headline before we spent A100 money on the final model/eval.
+
+---
+
+## Tradition Roadmap
+
+| Tradition | Status | Primary Confessions |
+|---|---|---|
+| **Reformed** | 🔄 **Active — v0.1** | WCF, Dort, LCF 1689 |
+| Lutheran | ⏳ v0.2 | Augsburg Confession, Luther's Catechisms |
+| Anglican | ⏳ v0.3 | 39 Articles, Book of Common Prayer |
+| Baptist (Traditional) | ⏳ v0.4 | LCF 1689, BF&M 2000 |
+| Methodist/Wesleyan | ⏳ v0.5 | Articles of Religion, Wesley's Sermons |
+| Pentecostal | ⏳ v0.6 | AG Statement of Fundamental Truths |
+| Congregationalist | ⏳ v0.7 | Savoy Declaration |
+
+---
+
+## Future Work & Recommendations (out of scope for v0.1 — for v0.2+)
+
+Ideas surfaced during v0.1 that we deliberately **do not** implement now (to keep
+scope tight and the CEFE.AI comparability clean), but that should be revisited next.
+
+### 0. System B — serving layer (RAG + citation guardrail) ⭐ promoted by v0.1.1
+The v0.1.1 probe proved that **factual accuracy and abstention cannot be reliably fixed
+by fine-tuning or even by prompt rules** (the model fabricates numbers/dates/citations
+~half the time despite an explicit abstention rule). The robust fix is a **serving
+layer separate from the fine-tuned model**: **RAG** over a curated corpus (Scripture,
+confessions, catechisms) so facts are *retrieved, not recalled*, plus a **citation
+guardrail** that blocks any claim/reference without traceable grounding. The fine-tune
+provides the Reformed *form/voice*; System B provides the *truth*. Principle:
+fine-tune = form, RAG = facts (see `docs/LESSONS.md` #1, #11–14). This is the highest-value
+next build for product reliability. (The model itself ships now as v0.1.1 with
+`configs/system_prompt_production.txt`.)
+
+**Guardrail = code, not training.** The guardrail is a **deterministic serving-layer
+check** (the reference exists in + matches the retrieved text; abstain on low retrieval)
+— it does **not** retrain the frozen model; at most it uses an **off-the-shelf NLI** model
+for the entailment/polarity check. (A live v0.1.1 test reproduced the failure class: the
+model composed a prayer to a saint, attributed it to Spurgeon, and cited a
+**polarity-inverted "WCF 21.3"** — fixable only by retrieve + verify, never by more
+fine-tune.)
+
+**KG: a *staged* pillar, not mandatory.** Embedding similarity is **polarity-blind** (it
+sees "saints/intercede/pray" as close to the true WCF 21, which *forbids* it), so a
+text-only citation check can miss inversions. A small, hand-curated, typed KG (confession
+→ chapter.section → normative claim, *affirms/forbids* edges) is the O(1) verifier backend
+**iff** a measured trigger fires (inversion false-negatives above tolerance,
+cross-confession comparison, multi-hop grounding, governance/audit, open corpus). Design
+the RAG metadata **KG-ready** now (stable entity IDs) so the graph can be layered without
+re-indexing, and instrument the verifier to log `(reference, verified?, contradiction-
+score)` so the KG decision is **data-driven, not speculative**. If built, the KG is a
+**subordinate, human/pastoral-curated, versioned index — never a doctrinal inference
+engine** (*magisterium creep*). All System B (RAG + guardrail + optional KG) is
+**deployer-side serving work, out of scope for the fine-tune release**.
+
+### 1. Multi-annotator judge validation (inter-annotator agreement)
+v0.1 validates the judge against **one** human labeler (κ: EN RR 0.80 / CB 0.63;
+pt-BR RR 0.79 / CB 0.98 — `docs/JUDGE_VALIDATION.md`). For stronger,
+publication-grade defensibility of the **absolute** numbers, use **2–3
+theologically-literate annotators** (ideally including a Reformed pastor) on the same
+blind, stratified sample and report:
+- **Native-speaker annotators per language track.** v0.1's single annotator is a
+  native pt-BR speaker; CB EN (κ=0.63) vs CB pt-BR (κ=0.98) shows the gap concentrates
+  on the *tonal* affirmation-vs-encouragement call — exactly the dimension most
+  sensitive to language fluency. A native-English annotator should label the EN track
+  and a native-pt-BR annotator the pt-BR track, so the κ measures judge quality, not
+  the annotator's second-language fluency.
+- **Inter-annotator agreement (IAA = human↔human κ)** — the *ceiling*. The judge's κ
+  must be read against the IAA, not against 1.0 (you cannot expect the judge to agree
+  with humans more than humans agree with each other — especially on the subjective
+  CB "affirmation vs encouragement" boundary we found).
+- **Judge vs the human consensus/majority**, not vs a single labeler.
+Recommended count: **3** (majority vote breaks ties; NLP standard) or **2 +
+adjudication** as the minimum. Reuse `08_judge_validation.py` extended to accept
+multiple label files → IAA + judge-vs-majority. (The **internal delta never needed
+this**; only absolute-number defensibility does.) κ is always re-measurable: a future
+version **re-runs (re-calibrates) the validation** — and MUST re-validate whenever the
+judge model, provider, or rubric changes.
+
+**Panel composition + calibration (the key methodological point).** The κ measures
+agreement with the **CEFE.AI rubric**, NOT with Reformed theology — so annotators
+must label by the *thin* rubric (explicit religion / directional bias as CEFE.AI
+defines it), setting aside their own confession. Risks and design:
+- **An all-Reformed panel shares a systematic "thick" deviation** (e.g. scoring a
+  gender-ideology answer as 4 "religious" — the q0019 case — when the thin rubric
+  makes it 0). Three same-confession raters would then *agree with each other* (high
+  IAA) but *all* disagree with the thin judge the same way → κ looks low as if the
+  *judge* were wrong, when it is the *annotators* applying their theology. And with
+  majority vote, 2-of-3 same-confession can dominate and encode that bias.
+- **A mixed panel mitigates this and adds credibility.** A proposed good mix: **2
+  Protestants + 1 religious-studies scholar** (e.g. Catholic, with cross-tradition
+  expertise — Buddhism/Shinto/Christianity). The scholar brings (a) a *descriptive,
+  non-advocacy* lens that matches the rubric's intent, and (b) coverage of the
+  non-Christian traditions in the CB benchmark (14 faiths) the Protestants may know
+  less. A non-Reformed, neutral-expertise rater also blinds the validation against the
+  "insiders judging themselves" critique a reviewer would raise. Treat the scholar's
+  labels as the rubric-fidelity anchor.
+- **Mandatory calibration round (non-blind) BEFORE independent labeling:** the raters
+  label ~5–10 items together and align on the rubric's definitions — especially the
+  *thin* religion definition and the *affirmation-vs-encouragement* CB boundary — so
+  confession does not leak into the labels. Then label independently and **blind**.
+  If well-calibrated to the external rubric, each rater's personal confession should
+  barely affect the labels. Report IAA: a Protestant↔scholar divergence is itself the
+  "confessional vs descriptive" signal.
+
+### 2. "Thick-religion" / idolatry-detection eval (OpenScriptura-specific Tier-2)
+CEFE.AI measures **explicit** religious representation (mentions of God / faith /
+practice / leaders) — a *thin* definition we MUST keep for leaderboard comparability.
+But from a Reformed/Augustinian lens all of life is religious: modern ideologies
+(wokism, Marxism, scientism, nationalism, consumerism…) are **functional religions /
+idolatries** with their own soteriology and orthodoxy. A response that frames an issue
+through such an ideology is, theologically, religious — yet scores **0** on CEFE.AI's
+thin RR (correctly, by their rubric).
+
+Future, **project-specific, NOT-leaderboard-comparable** benchmark: does the model
+**recognize modern ideologies as functional religion/idolatry, name them, and point to
+Christ** (confessional discernment)? This is arguably the **distinctive contribution**
+of a Reformed model — secular models are blind to ideological idolatry; a confessional
+one should not be. Build it as a separate eval (its own prompt set + judge rubric),
+clearly labeled as a *thick-religion* metric distinct from the *thin* CEFE.AI one. Do
+NOT fold it into the CEFE.AI κ or rubric (that would break the HARD RULE).
+
+### 3. Judge ensemble / panel (3 judges, different model families)
+The strongest mitigation for **judge-model training bias** (a single model's lean —
+e.g. DeepSeek's "both-sides/neutral" tendency that read affirming CB answers as
+neutral): score each item with **3 judges from different families** (e.g. DeepSeek +
+a Claude + a GPT tier), same vendored prompt, and aggregate.
+- **Aggregation = MEDIAN of the 3, not "two-equal majority".** On the fine ordinal
+  scales (RR 0–4, CB 1–7) exact ties are uncommon, so a "discard the odd one / else
+  escalate to 5" rule fires constantly and may never converge on a genuinely
+  ambiguous item. The median auto-discards the outlier, always converges, and
+  respects ordinality. (NB: this is *bias/representation* scoring, not *quality* — so
+  it is median/majority, **not** "take the two best, drop the worst", which is a
+  quality-scoring rule.) Treat a large **spread** across the 3 as a "high
+  disagreement / ambiguous item" signal rather than escalating.
+- **Comparability tradeoff (important):** an ensemble is fine for the **internal
+  delta** (use the *same* ensemble on both sides — the bias cancels and the delta is
+  *more* robust). But CEFE.AI used a **single** judge, so a 3-judge ensemble moves our
+  **absolute** numbers further from their methodology. A single judge stays "closer to
+  what CEFE.AI did"; the ensemble is more robust but a different process. Keep the
+  single-judge run in parallel if both robustness and leaderboard-proximity matter.
+- **Cheap first step (do before a full ensemble):** run the 3 judges on **only the
+  ~50-item κ sample** (not all 1,606). This decisively answers "does flash alone agree
+  with the ensemble? does the ensemble agree with the human better than flash?" at
+  negligible cost — a strong cross-check of the single-judge choice before committing
+  to 3× the judge spend on the whole benchmark. (Idea validated with the user, who has
+  used 3-LLM judging on a prior translation-scoring project.)
+
+### 4. Smaller, cheaper hardening (any version)
+- Larger κ sample (n≈100) for a tighter confidence interval if a borderline κ (CB 0.63)
+  needs to be defended more strongly.
+- Escalate the judge to `deepseek-v4-pro` + a pinned non-reasoning provider if the
+  flash absolute numbers ever prove insufficiently defensible (Lesson #18).
+
+---
+
+## Immediate Next Actions
+
+```
+✅  Phase 0 — CEFEAI baseline v1 COMPLETE (no system prompt)
+    RR: 4.7% Any Representation (n=150, $0.07) · CB: 19.6% Any Bias (n=1456, $0.72)
+
+✅  Phase 1 — Dataset construction COMPLETE
+    Tier C: 839 · Tier B: 2,129 · Merged train 2,873 + eval 151 (seed=42)
+
+✅  Phase 2 — Experiments COMPLETE
+    4 configs run on vast.ai RTX 4090; instance destroyed; adapters in results/
+    Winner: exp_c (r=64, lr=2e-4) eval_all_loss 0.6527 → configs/final.yaml
+
+✅  Phase 3/4 scripts WRITTEN + reviewed (2× /code-review) + simulated (38/38)
+    05_train_final.py · 06_export.py · 07_cefeai_eval.py · utils/cefeai.py
+
+✅  Eval protocol decided — HEADLINE = v1 (no system prompt). v2 tested & rejected
+    (raw + prompt saturated to RR 99.3% / CB 87.8%). Baselines in results/.
+
+▶  NEXT — Phase 3 on A100 80GB:
+    python scripts/05_train_final.py --config configs/final.yaml   # full bf16, early stopping
+    python scripts/06_export.py      --config configs/final.yaml --push-to-hub
+
+▶  THEN — Phase 4 (v1 headline) on the same A100:
+    python scripts/07_cefeai_eval.py --model-path checkpoints/final/merged --benchmark both
+    Compares fine-tuned(v1, no prompt) vs baseline(v1) → the leaderboard-comparable delta.
+    Optionally add --system-prompt for the v2 deployment-behavior datapoint.
+```
