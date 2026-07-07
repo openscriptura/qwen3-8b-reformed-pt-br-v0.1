@@ -99,39 +99,186 @@ def segment(text: str):
     return [u.strip() for u in units if len(u.strip()) > 40]
 
 
+TRANSLATE_SYS = (
+    "Você é um tradutor teológico especializado em textos confessionais reformados. "
+    "Traduza o texto do inglês para o português brasileiro (pt-BR) com FIDELIDADE TOTAL: "
+    "preserve a numeração de perguntas/capítulos/artigos, a estrutura, e as referências "
+    "bíblicas (abrevie no padrão pt-BR, ex.: Rm 11.36; 1Co 10.31). Use a terminologia "
+    "reformada clássica consagrada em português (ex.: 'justificação', 'santificação', "
+    "'pacto', 'eleição incondicional'). NÃO adicione comentários, notas ou explicações — "
+    "devolva SOMENTE a tradução."
+)
+
+JUDGE_SYS = (
+    "Você é um revisor de traduções teológicas (inglês -> pt-BR) de confissões reformadas. "
+    "Avalie a tradução em 5 critérios (0-100): fidelidade (sentido preservado, nada "
+    "adicionado/omitido), fluencia (português natural), terminologia (termos teológicos "
+    "consagrados), estilo (registro confessional adequado), completude (nada faltando, "
+    "numeração e referências preservadas). Responda APENAS um JSON: "
+    '{"fidelidade":N,"fluencia":N,"terminologia":N,"estilo":N,"completude":N,'
+    '"score":N,"problemas":["..."]} onde score é sua nota global (0-100).'
+)
+
+TRANSLATIONS_OUT = PROJECT_ROOT / "data" / "tier_c" / "tier_c_pd_translations.jsonl"
+MIN_SCORE = 95.0
+JUDGE_SEEDS = (42, 43, 44)  # temp-0 judges need distinct seeds to be independent
+
+
+def _unit_sha(work: str, text: str) -> str:
+    import hashlib
+    return hashlib.sha256(f"{work}\n{text}".encode("utf-8")).hexdigest()[:16]
+
+
+def _collect_units(source_filter=None):
+    files = sorted(SRC_DIR.glob("*.pd.txt"))
+    if source_filter:
+        files = [f for f in files if f.stem.replace(".pd", "") == source_filter]
+    per, units = [], []
+    for f in files:
+        work = f.stem.replace(".pd", "")
+        us = segment(f.read_text(encoding="utf-8"))
+        per.append((work, len(us)))
+        for i, u in enumerate(us):
+            units.append({"work": work, "idx": i, "en": u, "sha": _unit_sha(work, u)})
+    return per, units
+
+
+def _load_done() -> set:
+    done = set()
+    if TRANSLATIONS_OUT.exists():
+        for line in TRANSLATIONS_OUT.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # done = has a translation and a valid score (approved or not);
+            # only re-run rows that errored out (ptbr None / score None)
+            if r.get("ptbr") and r.get("score_final") is not None:
+                done.add(r["sha"])
+    return done
+
+
 def translate(args):
     if not SRC_DIR.exists():
         sys.exit("No sources. Run --fetch first.")
-    files = sorted(SRC_DIR.glob("*.pd.txt"))
-    if args.source:
-        files = [f for f in files if f.stem.replace(".pd", "") == args.source]
-    total_units, per = 0, []
-    for f in files:
-        units = segment(f.read_text(encoding="utf-8"))
-        per.append((f.stem, len(units)))
-        total_units += len(units)
+    per, units = _collect_units(args.source)
     print("Units per work:")
     for name, n in per:
-        print(f"  {name:<14} {n:>4}")
-    # ~1 translate call + 3 judge calls per unit; ~600 tok each on a cheap model
-    est_calls = total_units * 4
-    est_usd = est_calls * 0.0007
-    print(f"\nTOTAL units: {total_units} | est. API calls: ~{est_calls} "
-          f"(1 translate + 3 judge / unit) | rough cost: ~US$ {est_usd:.2f} (flash tier)")
+        print(f"  {name:<24} {n:>4}")
+    done = _load_done()
+    todo = [u for u in units if u["sha"] not in done]
+    if args.limit:
+        todo = todo[: args.limit]
+    est_calls = len(todo) * (1 + len(JUDGE_SEEDS))
+    print(f"\nTOTAL units: {len(units)} | done (resume): {len(done & {u['sha'] for u in units})} "
+          f"| to run: {len(todo)} | est. calls: ~{est_calls} | rough cost: ~US$ {est_calls * 0.0007:.2f} (flash)")
     if not args.execute:
         print("\nDRY-RUN — no API spent. Re-run with --execute (and OPENROUTER_API_KEY set) to translate.")
         return
-    # ---- PAID path (explicit) ----
+    if not todo:
+        print("Nothing to do — all units already translated (resume). See", TRANSLATIONS_OUT)
+        return
+
+    # ---- PAID path ----
+    import asyncio, httpx
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-    from utils.api_client import OpenRouterClient           # noqa
-    from utils.cost_tracker import CostTracker              # noqa
-    print("\n[execute] translating via OpenRouterClient + judge QA (>=95) ... (implements docs/PD_RETRANSLATION_SPEC.md)")
-    # NOTE: fill the OpenRouterClient calls to translate each unit EN->pt-BR, then
-    # judge-QA (fidelity/fluency/terminology/style/completeness >=95), append passing
-    # units to tier_c_pd.jsonl with provenance {source, url, license:'PD original',
-    # translator_model, ai_translated:true}. Pastoral review gate BEFORE merge.
-    raise SystemExit("Paid translation step is intentionally not auto-run here — "
-                     "wire the OpenRouterClient calls per the spec, then merge after pastoral review.")
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(PROJECT_ROOT / ".env")
+    except ImportError:
+        pass
+    from utils.api_client import OpenRouterClient
+    from utils.cost_tracker import CostTracker, CostLimitExceeded
+    from utils.progress import ProgressBar
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    model = args.model or os.getenv("OPENROUTER_MODEL_TRANSLATOR", "deepseek/deepseek-v4-flash")
+    if not api_key:
+        sys.exit("OPENROUTER_API_KEY not set (env or .env).")
+
+    api = OpenRouterClient(api_key=api_key, base_url=base_url)
+    tracker = CostTracker(limit_usd=args.cost_limit)
+    sem = asyncio.Semaphore(8)
+    TRANSLATIONS_OUT.parent.mkdir(parents=True, exist_ok=True)
+    write_lock = asyncio.Lock()
+    bar = ProgressBar(total=len(todo), label=f"translate+QA ({model})")
+    print(f"\n[execute] {len(todo)} units | translator+judge = {model} | "
+          f"cost limit US$ {args.cost_limit:.2f} | out: {TRANSLATIONS_OUT}\n")
+
+    def _parse_judge(txt: str):
+        m = re.search(r"\{.*\}", txt, flags=re.S)
+        if not m:
+            return None
+        try:
+            j = json.loads(m.group(0))
+            return float(j.get("score")) if j.get("score") is not None else None
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    async def process(client, u):
+        async with sem:
+            rec = {"work": u["work"], "idx": u["idx"], "sha": u["sha"], "en": u["en"],
+                   "ptbr": None, "scores": [], "score_final": None, "approved": False,
+                   "translator_model": model, "judge_model": model,
+                   "license": "PD original (see configs/pd_sources.json)", "ai_translated": True}
+            try:
+                t_resp = await api.chat(
+                    client, model=model,
+                    messages=[{"role": "system", "content": TRANSLATE_SYS},
+                              {"role": "user", "content": u["en"]}],
+                    temperature=0.0, max_tokens=3072, seed=42,
+                )
+                tracker.add(api.estimate_cost_usd(t_resp, model))
+                ptbr = api.extract_text(t_resp).strip()
+                if not ptbr:
+                    raise ValueError("empty translation")
+                rec["ptbr"] = ptbr
+                judge_user = f"TEXTO ORIGINAL (EN):\n{u['en']}\n\nTRADUÇÃO (pt-BR):\n{ptbr}"
+                for sd in JUDGE_SEEDS:
+                    j_resp = await api.chat(
+                        client, model=model,
+                        messages=[{"role": "system", "content": JUDGE_SYS},
+                                  {"role": "user", "content": judge_user}],
+                        temperature=0.0, max_tokens=1024, seed=sd,  # 1024: Lesson #18
+                    )
+                    tracker.add(api.estimate_cost_usd(j_resp, model))
+                    s = _parse_judge(api.extract_text(j_resp))
+                    if s is not None:
+                        rec["scores"].append(s)
+                if rec["scores"]:
+                    rec["score_final"] = sum(rec["scores"]) / len(rec["scores"])
+                    rec["approved"] = rec["score_final"] >= MIN_SCORE
+            except CostLimitExceeded:
+                raise
+            except Exception as e:                       # keep the row; resume re-runs it
+                rec["error"] = f"{type(e).__name__}: {e}"
+            async with write_lock:
+                with TRANSLATIONS_OUT.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                bar.update(1)
+            return rec
+
+    async def run():
+        async with httpx.AsyncClient(timeout=120) as client:
+            results = []
+            try:
+                for coro in asyncio.as_completed([process(client, u) for u in todo]):
+                    results.append(await coro)
+            except CostLimitExceeded as e:
+                print(f"\nCOST LIMIT hit: {e} — partial progress saved; re-run to resume.")
+            return results
+
+    results = asyncio.run(run())
+    ok = [r for r in results if r.get("approved")]
+    low = [r for r in results if r.get("score_final") is not None and not r.get("approved")]
+    err = [r for r in results if r.get("error")]
+    print(f"\nDone. approved(>= {MIN_SCORE:.0f}): {len(ok)} | below-threshold: {len(low)} | "
+          f"errors (will re-run on resume): {len(err)} | spent: US$ {tracker.total:.2f}")
+    print(f"Output: {TRANSLATIONS_OUT}")
+    print("NEXT: pastoral review of the approved translations, then --build / merge_dataset.py.")
 
 
 def main():
@@ -142,6 +289,9 @@ def main():
     ap.add_argument("--source", help="single work id (e.g. wsc)")
     ap.add_argument("--dry-run", action="store_true", help="translate: estimate only (default)")
     ap.add_argument("--execute", action="store_true", help="translate: actually spend API")
+    ap.add_argument("--model", help="translator+judge model (default: env OPENROUTER_MODEL_TRANSLATOR or deepseek/deepseek-v4-flash)")
+    ap.add_argument("--cost-limit", type=float, default=10.0, help="hard USD stop (default 10)")
+    ap.add_argument("--limit", type=int, help="max units this run (smoke test)")
     a = ap.parse_args()
     if a.fetch:
         fetch()
