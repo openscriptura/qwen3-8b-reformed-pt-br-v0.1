@@ -1,0 +1,40 @@
+{
+  "note": "Public-domain ORIGINAL sources for re-translating the confessions to pt-BR with our own AI pipeline, so Tier C becomes redistributable. HARD RULE: translate ONLY from these PD originals — never from a copyrighted modern PT edition. Heidelberg + Canons of Dort are sourced from the PD 'Three Forms of Unity' scan (OCR — needs split+cleaning). See docs/PD_RETRANSLATION_SPEC.md.",
+  "items": [
+    {
+      "id": "wsc", "title": "Westminster Shorter Catechism (1647)", "lang": "en",
+      "url": "https://en.wikisource.org/w/index.php?title=Westminster_Shorter_Catechism&action=raw",
+      "source": "Wikisource", "format": "wikitext",
+      "license": "public domain (1647 original text)", "status": "clean"
+    },
+    {
+      "id": "wlc", "title": "Westminster Larger Catechism (1648)", "lang": "en",
+      "url": "https://en.wikisource.org/w/index.php?title=Westminster_Larger_Catechism&action=raw",
+      "source": "Wikisource", "format": "wikitext",
+      "license": "public domain (1648 original text)", "status": "clean"
+    },
+    {
+      "id": "lcf_1689", "title": "London Baptist Confession of Faith (1677/1689)", "lang": "en",
+      "url": "https://en.wikisource.org/w/index.php?title=1689_Baptist_Confession_of_Faith&action=raw",
+      "source": "Wikisource", "format": "wikitext",
+      "license": "public domain (1677/1689 original text)", "status": "clean"
+    },
+    {
+      "id": "three_forms_of_unity", "title": "Three Forms of Unity (Heidelberg Catechism 1563, Belgic Confession, Canons of Dort 1619)", "lang": "en",
+      "url": "https://archive.org/download/threeformsofunit00slmi/threeformsofunit00slmi_djvu.txt",
+      "source": "Internet Archive (PD scan)", "format": "text",
+      "license": "public domain (old PD English edition; NOT the modern URCNA/RCUS translation)",
+      "status": "ocr-needs-split-clean",
+      "contains": ["heidelberg", "dort", "belgic (unused)"]
+    },
+    {
+      "id": "wcf", "title": "Westminster Confession of Faith (1646)", "lang": "en",
+      "url": "https://www.ccel.org/ccel/schaff/creeds3.toc.html",
+      "source": "Schaff, Creeds of Christendom Vol. III (CCEL) — or an Internet Archive PD scan",
+      "format": "html",
+      "license": "public domain (Schaff 1877 + 1646 original)",
+      "status": "pending-source",
+      "todo": "drop a clean PD WCF text into data/sources/confessions_pd/wcf.pd.txt (Schaff Vol.III or archive.org). Wikisource 'Westminster Confession of Faith' is a versions/disambiguation page."
+    }
+  ]
+}
