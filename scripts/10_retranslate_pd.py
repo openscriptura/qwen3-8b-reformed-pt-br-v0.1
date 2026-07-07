@@ -211,7 +211,8 @@ def translate(args):
     if not api_key:
         sys.exit("OPENROUTER_API_KEY not set (env or .env).")
 
-    api = OpenRouterClient(api_key=api_key, base_url=base_url)
+    raw_dir = PROJECT_ROOT / "logs" / "raw" / "pd_retranslate"   # full audit trail per call
+    api = OpenRouterClient(api_key=api_key, base_url=base_url, log_raw_dir=raw_dir)
     tracker = CostTracker(limit_usd=args.cost_limit)
     sem = asyncio.Semaphore(8)
     TRANSLATIONS_OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -221,14 +222,19 @@ def translate(args):
           f"cost limit US$ {args.cost_limit:.2f} | out: {TRANSLATIONS_OUT}\n")
 
     def _parse_judge(txt: str):
+        """-> (score, detail) — detail keeps the per-criterion notes + problems."""
         m = re.search(r"\{.*\}", txt, flags=re.S)
         if not m:
-            return None
+            return None, None
         try:
             j = json.loads(m.group(0))
-            return float(j.get("score")) if j.get("score") is not None else None
+            score = float(j.get("score")) if j.get("score") is not None else None
+            detail = {k: j.get(k) for k in
+                      ("fidelidade", "fluencia", "terminologia", "estilo", "completude", "problemas")
+                      if k in j}
+            return score, detail
         except (json.JSONDecodeError, TypeError, ValueError):
-            return None
+            return None, None
 
     async def process(client, u):
         async with sem:
@@ -243,6 +249,7 @@ def translate(args):
                     messages=[{"role": "system", "content": TRANSLATE_SYS},
                               {"role": "user", "content": u["en"]}],
                     temperature=0.0, max_tokens=3072, seed=42,
+                    log_key=f"{u['sha']}_translate",
                 )
                 tracker.add(api.estimate_cost_usd(t_resp, model))
                 ptbr = api.extract_text(t_resp).strip()
@@ -251,21 +258,23 @@ def translate(args):
                 rec["ptbr"] = ptbr
                 judge_user = f"TEXTO ORIGINAL (EN):\n{u['en']}\n\nTRADUÇÃO (pt-BR):\n{ptbr}"
                 for jm in JUDGE_MODELS:                  # 3 DIFFERENT judge LLMs
+                    detail = None
                     try:
                         j_resp = await api.chat(
                             client, model=jm,
                             messages=[{"role": "system", "content": JUDGE_SYS},
                                       {"role": "user", "content": judge_user}],
                             temperature=0.0, max_tokens=1024, seed=42,  # 1024: Lesson #18
+                            log_key=f"{u['sha']}_judge_{jm.split('/')[-1]}",
                         )
                         tracker.add(api.estimate_cost_usd(j_resp, jm))
-                        s = _parse_judge(api.extract_text(j_resp))
+                        s, detail = _parse_judge(api.extract_text(j_resp))
                     except CostLimitExceeded:
                         raise
                     except Exception as je:              # one judge down != unit lost
                         s = None
                         rec.setdefault("judge_errors", []).append(f"{jm}: {type(je).__name__}")
-                    rec["scores"].append({"judge": jm, "score": s})
+                    rec["scores"].append({"judge": jm, "score": s, "detail": detail})
                 valid = [d["score"] for d in rec["scores"] if d["score"] is not None]
                 if len(valid) >= 2:                      # median needs a real panel
                     import statistics
@@ -304,10 +313,35 @@ def translate(args):
     print("NEXT: pastoral review of the approved translations, then --build / merge_dataset.py.")
 
 
+def report():
+    if not TRANSLATIONS_OUT.exists():
+        sys.exit(f"No results yet: {TRANSLATIONS_OUT}")
+    rows = [json.loads(l) for l in TRANSLATIONS_OUT.read_text(encoding="utf-8").splitlines() if l.strip()]
+    ok = sum(1 for r in rows if r.get("approved"))
+    low = sum(1 for r in rows if r.get("score_final") is not None and not r.get("approved"))
+    err = sum(1 for r in rows if r.get("error"))
+    print(f"units: {len(rows)} | approved(mediana>={MIN_SCORE:.0f}): {ok} | reprovadas: {low} | erros(re-run no resume): {err}\n")
+    for r in rows:
+        js = " | ".join(f"{(d.get('judge') or '?').split('/')[-1]}={d.get('score')}" for d in r.get("scores", []))
+        print(f"[{r['work']}#{r['idx']}] mediana={r.get('score_final')} aprovado={r.get('approved')} :: {js}")
+        for d in r.get("scores", []):
+            det = d.get("detail")
+            if det:
+                crit = " ".join(f"{k}={det[k]}" for k in ("fidelidade", "fluencia", "terminologia", "estilo", "completude") if k in det)
+                probs = det.get("problemas") or []
+                print(f"    - {(d.get('judge') or '?').split('/')[-1]}: {crit}" + (f" | problemas: {probs}" if probs else ""))
+        if r.get("error"):
+            print(f"    ! erro: {r['error']}")
+        if r.get("judge_errors"):
+            print(f"    ! juiz-erros: {r['judge_errors']}")
+    print(f"\nLogs brutos por chamada (request/response completos): logs/raw/pd_retranslate/<sha>_translate.json e <sha>_judge_<modelo>.json")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--fetch", action="store_true")
     ap.add_argument("--translate", action="store_true")
+    ap.add_argument("--report", action="store_true", help="tabulate per-judge scores/details from the output jsonl")
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--source", help="single work id (e.g. wsc)")
     ap.add_argument("--dry-run", action="store_true", help="translate: estimate only (default)")
@@ -318,6 +352,8 @@ def main():
     a = ap.parse_args()
     if a.fetch:
         fetch()
+    elif a.report:
+        report()
     elif a.translate:
         translate(a)
     elif a.build:
