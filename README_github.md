@@ -67,7 +67,7 @@ cd results/phase4 && ollama create reformed-ptbr --quantize q4_K_M -f Modelfile 
 > Comandos completos do pipeline (baseline, sweep, treino, avaliação) na seção **English** abaixo.
 
 ### Como contribuir
-Contribuições bem-vindas em **todas as tradições e idiomas** — veja `CONTRIBUTING.md`. **Licença: Apache 2.0** (uso livre, inclusive comercial, com atribuição).
+Contribuições bem-vindas em **todas as tradições e idiomas** — veja [CONTRIBUTING.md](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/blob/main/CONTRIBUTING.md). **Licença: Apache 2.0** (uso livre, inclusive comercial, com atribuição).
 
 ---
 
@@ -274,7 +274,7 @@ GPU: RTX 4090 (24GB) minimum for experiments
 ### Installation
 
 ```bash
-git clone https://github.com/openscriptura/openscriptura
+git clone https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1
 cd openscriptura
 pip install -r requirements.txt --break-system-packages
 cp .env.example .env
@@ -427,9 +427,9 @@ Phase 3 — Community-Driven
 
 We welcome contributions across all Protestant traditions and languages.
 
-**New tradition:** see [`docs/ADDING_A_TRADITION.md`](docs/ADDING_A_TRADITION.md). You need: primary confessional standards, a seed corpus of at least 200 examples, and one person willing to do pastoral review.
+**New tradition:** see [`docs/ADDING_A_TRADITION.md`](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/blob/main/docs/ADDING_A_TRADITION.md). You need: primary confessional standards, a seed corpus of at least 200 examples, and one person willing to do pastoral review.
 
-**New language:** see [`docs/ADDING_A_LANGUAGE.md`](docs/ADDING_A_LANGUAGE.md).
+**New language:** see [`docs/ADDING_A_LANGUAGE.md`](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/blob/main/docs/ADDING_A_LANGUAGE.md).
 
 **Dataset examples:** open an issue with theological Q&A in any tradition and language. Include the confessional reference.
 
@@ -446,7 +446,7 @@ We welcome contributions across all Protestant traditions and languages.
   title        = {OpenScriptura: Open LLMs for Protestant Theology},
   author       = {OpenScriptura Contributors},
   year         = {2026},
-  howpublished = {\url{https://github.com/openscriptura/openscriptura}},
+  howpublished = {\url{https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1}},
   note         = {Apache 2.0. Multi-tradition, language-agnostic pipeline.
                   Benchmarked against CEFEAI AllFaith Benchmark.}
 }
@@ -456,7 +456,7 @@ We welcome contributions across all Protestant traditions and languages.
 
 ## License
 
-Apache 2.0 — see [`LICENSE`](LICENSE). Free use including commercial. Attribution required.
+Apache 2.0 — see [`LICENSE`](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/blob/main/LICENSE). Free use including commercial. Attribution required.
 
 ---
 
@@ -466,6 +466,6 @@ Apache 2.0 — see [`LICENSE`](LICENSE). Free use including commercial. Attribut
 
 *For the glory of God and the good of the Church — in every tradition and every language.*
 
-[HuggingFace](https://huggingface.co/openscriptura) · [CEFEAI](https://cefe.ai) · [Issues](https://github.com/openscriptura/openscriptura/issues)
+[HuggingFace](https://huggingface.co/openscriptura) · [CEFEAI](https://cefe.ai) · [Issues](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/issues)
 
 </div>

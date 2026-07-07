@@ -210,7 +210,7 @@ Phase 3 — Community-Driven
 
 ## Contributing
 
-We welcome contributions across all Protestant traditions and languages. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide.
+We welcome contributions across all Protestant traditions and languages. See [`CONTRIBUTING.md`](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/blob/main/CONTRIBUTING.md) for the full guide.
 
 - **Dataset examples:** open an issue with theological Q&A in any tradition and language. Include the confessional reference.
 - **Doctrinal corrections:** open an issue with the problematic example and the correct reference.
@@ -235,7 +235,7 @@ We welcome contributions across all Protestant traditions and languages. See [`C
 
 ## License
 
-Apache 2.0 — see [`LICENSE`](LICENSE). Free use including commercial; attribution required.
+Apache 2.0 — see [`LICENSE`](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/blob/main/LICENSE). Free use including commercial; attribution required.
 
 ---
 

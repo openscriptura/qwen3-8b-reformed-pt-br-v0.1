@@ -91,7 +91,7 @@ O modelo **roda localmente** (não precisa de HuggingFace para testar). Use semp
 ### Licença, Contribuição e Citação
 
 - **Licença:** **Apache 2.0** — uso livre, inclusive comercial, com atribuição.
-- **Contribuições** são bem-vindas em todas as tradições e idiomas — veja [CONTRIBUTING.md](https://github.com/openscriptura/openscriptura).
+- **Contribuições** são bem-vindas em todas as tradições e idiomas — veja [CONTRIBUTING.md](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/blob/main/CONTRIBUTING.md).
 - Citação: veja o bloco BibTeX na seção em inglês abaixo.
 
 ---
@@ -212,7 +212,7 @@ All models and datasets are published under **Apache 2.0** — free use includin
 
 ### Contributing
 
-Contributions are welcome across all Protestant traditions and languages. See [CONTRIBUTING.md](https://github.com/openscriptura/openscriptura).
+Contributions are welcome across all Protestant traditions and languages. See [CONTRIBUTING.md](https://github.com/openscriptura/qwen3-8b-reformed-pt-br-v0.1/blob/main/CONTRIBUTING.md).
 
 ### Citation
 
