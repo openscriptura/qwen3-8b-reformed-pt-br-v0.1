@@ -12,6 +12,19 @@ They are loaded at runtime by `scripts/utils/cefeai.py` — the judge prompts ar
 
 Captured 2026-06-08.
 
+## License & attribution
+These vendored files (`rr_scoring_prompt.json`, `cb_scoring_prompt.json`) are the
+property of **CEFE-AI (CEFE.ai)** and are redistributed here **verbatim** under the
+**MIT License** — see [`LICENSE.CEFEAI`](LICENSE.CEFEAI) (© 2026 CEFE-AI). Per MIT,
+the copyright and permission notice is retained with the files.
+
+The benchmark **questions** are **not** redistributed in this repo; obtain them from
+the official CEFE-AI repositories (also MIT):
+- https://github.com/CEFEAI/allfaith-religious-representation
+- https://github.com/CEFEAI/allfaith-conversion-bias
+
+Paper: *Omissive Bias in Religious Representation* (arXiv:2605.24319). Site: https://cefe.ai
+
 ## Verify byte-fidelity against upstream
 ```bash
 curl -s https://raw.githubusercontent.com/CEFEAI/allfaith-religious-representation/main/scoring_prompt.json -o /tmp/rr_up.json
