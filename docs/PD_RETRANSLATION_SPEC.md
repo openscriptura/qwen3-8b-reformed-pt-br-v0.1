@@ -1,0 +1,58 @@
+# Mini-spec — Public-Domain Re-translation (make Tier C + PD authors publishable)
+
+**Status:** Planned (dataset expansion) · **Date:** 2026-06-29 · **Not part of the v0.1.1 release.**
+
+## Objective
+Make the currently-unpublishable corpus **redistributable** by **re-translating public-domain source works with our own AI pipeline** (translate + judge QA), exactly as already done for Spurgeon (1,542 Tier B records). Because the **source is public domain** and the **translation is ours**, the result infringes no third party and can be released.
+
+## Why this is needed
+The current Tier C (confessions) and part of Tier B (monergismo) are **not** redistributable — not because the *originals* are protected, but because we used **third-party modern Portuguese translations** (monergismo.com / IPB / CPRC / Ligonier / Cultura Cristã), which carry their own translation copyright. See `docs/` copyright audit. Spurgeon is already clean precisely because **we AI-translated the PD English ourselves** (`data/sources/spurgeon/*_avaliacao.json` = our translation-quality judge, score ≥ 95).
+
+## ⛔ The one rule that must not break
+**Translate from the PUBLIC-DOMAIN ORIGINAL — never from our existing copyrighted PT files.**
+Re-translating/paraphrasing a protected PT translation still produces a **derivative of that protected translation** (the expression carries over). The translator's input MUST be the PD original-language text (or a confirmed-PD English translation). Discard the current `data/sources/confessions/*.pdf|*.txt` as a *source* (keep only for reference/diffing, not as translation input).
+
+## Scope
+**IN (has a PD-original route):**
+- Confessions/catechisms (Tier C): **WCF & Westminster Catechisms (1647, English PD)**, **LBCF 1689 (English PD)**, **Heidelberg Catechism (1563, German/Latin PD; PD English translations exist)**, **Canons of Dort (1619, Latin/Dutch PD; PD English translations exist)**.
+- PD-original monergismo authors (Tier B): Calvin, Edwards, Augustine, Luther, Sibbes, J.C. Ryle, B.B. Warfield, E.M. Bounds, Pascal (A.W. Pink borderline — died 1952, PD in life+70 jurisdictions ~2023; verify per target jurisdiction).
+
+**OUT permanently (original work itself is copyrighted — no route):**
+- Living / recently-deceased monergismo authors: John Piper, John Stott (†2011), Anthony Hoekema (†1988), Greg Bahnsen (†1995), G.C. Berkouwer (†1996), William Hendriksen (†1982), R.B. Kuiper (†1966), Henry Bast (†1977), Loraine Boettner (†1990), Odayr Olivetti (†2013), Vincent Cheung, Tim Challies, David Engelsma, David Robertson, Barry Gritters, Doug Kuiper, Brian Schwertley, John Barnett, Kenneth Gentry, Nathan Pitchford, Roger Smalling, Ronald Hanko, W. Gary Crampton, Eliseu & Irene Pereira, Wilbern Best.
+
+## Method (reuse the Spurgeon pipeline)
+1. **Source PD originals** from authoritative public-domain archives (record the exact source + confirm PD status per item).
+2. **AI-translate** EN/LA/DE → pt-BR (same translator step used for Spurgeon).
+3. **Judge QA** (translation rubric: fidelity, fluency, terminology, style, completeness; keep the ≥ 95 threshold used for Spurgeon).
+4. **Pastoral review for the confessions** (Tier A discipline) — a mistranslation in a confession is a *doctrinal* error; require human confessional review before inclusion.
+5. **Rebuild** `tier_c.jsonl` (from the new translations) and a `tier_b_pd.jsonl` (PD authors), regenerate manifests, re-merge.
+
+## Licensing & provenance
+- Release under a **permissive license / CC0** ("to the extent rights subsist"), because **AI-generated translation copyrightability is contested** — we do not need to *hold* copyright to publish; we need to not infringe (satisfied: PD source + our translation).
+- **Transparency note in the dataset card:** "translations are AI-generated from public-domain originals, QA'd by an LLM judge (≥95) and (for confessions) pastoral review."
+- **Confirm the translation model's terms of use** grant output rights to the user (our OpenRouter/DeepSeek path does; record the model + date).
+
+## Deliverables
+- `scripts/` translate step (reuse existing) + PD-source manifest with per-item PD confirmation.
+- Rebuilt `data/tier_c/tier_c.jsonl`, `data/tier_b/tier_b_pd.jsonl` (+ manifests).
+- Updated dataset card (Tier A + Spurgeon + rebuilt Tier C + PD authors), with provenance notes.
+
+## Risks & mitigations
+| Risk | Mitigation |
+|---|---|
+| Translating from the copyrighted PT (derivative) | **Hard rule**: input = PD original only; log the source per item |
+| Doctrinal error in an AI translation of a confession | Pastoral/confessional human review before inclusion |
+| AI mistranslation / hallucination | Judge QA ≥95 + spot human checks |
+| Wrong PD assumption (jurisdiction) | Confirm PD per item + jurisdiction (esp. A.W. Pink 1952) |
+| Model-terms conflict | Confirm translator model grants output rights; record it |
+
+## Publishable-corpus map (after this rebuild)
+| Slice | Now | After PD re-translation |
+|---|---|---|
+| Tier A (curated, ours) | ✅ | ✅ |
+| Tier B — Spurgeon (our AI translation of PD) | ✅ | ✅ |
+| Tier C — confessions | ❌ | ✅ (re-translated from PD originals) |
+| Tier B — PD-original authors | ❌ | ✅ (re-translated from PD originals) |
+| Tier B — copyrighted authors | ❌ | ❌ (original protected — no route) |
+
+_See also: the copyright audit in the session record; `docs/` dataset-publication decisions._
