@@ -133,6 +133,11 @@ JUDGE_MODELS = tuple(
         "google/gemini-3.5-flash,openai/gpt-oss-120b,xiaomi/mimo-v2.5",
     ).split(",") if m.strip()
 )
+# gpt-oss-120b and mimo-v2.5 are REASONING models: they burn ~1000 reasoning
+# tokens before emitting the JSON (observed finish_reason=length at 1024 →
+# empty/truncated content — the Lesson #18 failure mode). 4096 gives headroom;
+# billing is on actual tokens used.
+JUDGE_MAX_TOKENS = 4096
 
 
 def _unit_sha(work: str, text: str) -> str:
@@ -264,7 +269,7 @@ def translate(args):
                             client, model=jm,
                             messages=[{"role": "system", "content": JUDGE_SYS},
                                       {"role": "user", "content": judge_user}],
-                            temperature=0.0, max_tokens=1024, seed=42,  # 1024: Lesson #18
+                            temperature=0.0, max_tokens=JUDGE_MAX_TOKENS, seed=42,  # Lesson #18 (reasoning judges)
                             log_key=f"{u['sha']}_judge_{jm.split('/')[-1]}",
                         )
                         tracker.add(api.estimate_cost_usd(j_resp, jm))
