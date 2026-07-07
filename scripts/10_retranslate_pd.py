@@ -8,8 +8,11 @@ never from a copyrighted modern PT edition.
 Modes
   --fetch                 download PD sources (free HTTP), clean, save to
                           data/sources/confessions_pd/{id}.pd.txt   [no API spend]
-  --translate             segment + translate + judge-QA -> data/tier_c/tier_c_pd.jsonl
+  --translate             segment + translate + 3-LLM judge panel (MEDIAN >= 93)
+                          -> data/tier_c/tier_c_pd_translations.jsonl
                           (PAID; prints a cost estimate and does nothing unless --execute)
+                          judges: google/gemini-3.5-flash, openai/gpt-oss-120b,
+                          xiaomi/mimo-v2.5 (override: env OPENROUTER_PD_JUDGES)
   --build                 (stub) hand off to scripts/merge_dataset.py
 
 Examples
@@ -120,8 +123,16 @@ JUDGE_SYS = (
 )
 
 TRANSLATIONS_OUT = PROJECT_ROOT / "data" / "tier_c" / "tier_c_pd_translations.jsonl"
-MIN_SCORE = 95.0
-JUDGE_SEEDS = (42, 43, 44)  # temp-0 judges need distinct seeds to be independent
+MIN_SCORE = 93.0  # MEDIAN of the 3-judge panel must be >= 93 (0-100)
+# 3 DIFFERENT judge models (panel decision: median-of-3, diverse judges — avoids
+# self-preference of the translator model grading itself). Override via env
+# OPENROUTER_PD_JUDGES (comma-separated).
+JUDGE_MODELS = tuple(
+    m.strip() for m in os.getenv(
+        "OPENROUTER_PD_JUDGES",
+        "google/gemini-3.5-flash,openai/gpt-oss-120b,xiaomi/mimo-v2.5",
+    ).split(",") if m.strip()
+)
 
 
 def _unit_sha(work: str, text: str) -> str:
@@ -171,9 +182,10 @@ def translate(args):
     todo = [u for u in units if u["sha"] not in done]
     if args.limit:
         todo = todo[: args.limit]
-    est_calls = len(todo) * (1 + len(JUDGE_SEEDS))
-    print(f"\nTOTAL units: {len(units)} | done (resume): {len(done & {u['sha'] for u in units})} "
-          f"| to run: {len(todo)} | est. calls: ~{est_calls} | rough cost: ~US$ {est_calls * 0.0007:.2f} (flash)")
+    est_calls = len(todo) * (1 + len(JUDGE_MODELS))
+    print(f"\nJudges (median >= {MIN_SCORE:.0f}): {', '.join(JUDGE_MODELS)}")
+    print(f"TOTAL units: {len(units)} | done (resume): {len(done & {u['sha'] for u in units})} "
+          f"| to run: {len(todo)} | est. calls: ~{est_calls} | rough cost: ~US$ {est_calls * 0.0009:.2f}")
     if not args.execute:
         print("\nDRY-RUN — no API spent. Re-run with --execute (and OPENROUTER_API_KEY set) to translate.")
         return
@@ -222,7 +234,8 @@ def translate(args):
         async with sem:
             rec = {"work": u["work"], "idx": u["idx"], "sha": u["sha"], "en": u["en"],
                    "ptbr": None, "scores": [], "score_final": None, "approved": False,
-                   "translator_model": model, "judge_model": model,
+                   "translator_model": model, "judge_models": list(JUDGE_MODELS),
+                   "aggregation": f"median >= {MIN_SCORE:.0f}",
                    "license": "PD original (see configs/pd_sources.json)", "ai_translated": True}
             try:
                 t_resp = await api.chat(
@@ -237,20 +250,30 @@ def translate(args):
                     raise ValueError("empty translation")
                 rec["ptbr"] = ptbr
                 judge_user = f"TEXTO ORIGINAL (EN):\n{u['en']}\n\nTRADUÇÃO (pt-BR):\n{ptbr}"
-                for sd in JUDGE_SEEDS:
-                    j_resp = await api.chat(
-                        client, model=model,
-                        messages=[{"role": "system", "content": JUDGE_SYS},
-                                  {"role": "user", "content": judge_user}],
-                        temperature=0.0, max_tokens=1024, seed=sd,  # 1024: Lesson #18
-                    )
-                    tracker.add(api.estimate_cost_usd(j_resp, model))
-                    s = _parse_judge(api.extract_text(j_resp))
-                    if s is not None:
-                        rec["scores"].append(s)
-                if rec["scores"]:
-                    rec["score_final"] = sum(rec["scores"]) / len(rec["scores"])
+                for jm in JUDGE_MODELS:                  # 3 DIFFERENT judge LLMs
+                    try:
+                        j_resp = await api.chat(
+                            client, model=jm,
+                            messages=[{"role": "system", "content": JUDGE_SYS},
+                                      {"role": "user", "content": judge_user}],
+                            temperature=0.0, max_tokens=1024, seed=42,  # 1024: Lesson #18
+                        )
+                        tracker.add(api.estimate_cost_usd(j_resp, jm))
+                        s = _parse_judge(api.extract_text(j_resp))
+                    except CostLimitExceeded:
+                        raise
+                    except Exception as je:              # one judge down != unit lost
+                        s = None
+                        rec.setdefault("judge_errors", []).append(f"{jm}: {type(je).__name__}")
+                    rec["scores"].append({"judge": jm, "score": s})
+                valid = [d["score"] for d in rec["scores"] if d["score"] is not None]
+                if len(valid) >= 2:                      # median needs a real panel
+                    import statistics
+                    rec["score_final"] = statistics.median(valid)
+                    rec["n_judges"] = len(valid)
                     rec["approved"] = rec["score_final"] >= MIN_SCORE
+                else:
+                    rec["error"] = f"only {len(valid)}/3 judges returned a score"
             except CostLimitExceeded:
                 raise
             except Exception as e:                       # keep the row; resume re-runs it
