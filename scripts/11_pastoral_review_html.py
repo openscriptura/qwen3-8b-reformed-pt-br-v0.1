@@ -114,10 +114,10 @@ def build_html(work: str, items: list, manifest: dict, diff_by_sha: dict) -> str
             "diff_notes": diff_notes,
         })
 
-    # Prioritize what needs a careful human look: flagged first, then unchecked, then
-    # high-confidence last (fast pass) — operationalizes the review-speed recommendation.
-    tier_order = {"revisar": 0, "sem_check": 1, "alta": 2}
-    data_js_items.sort(key=lambda d: tier_order[d["tier"]])
+    # Keep NATURAL DOCUMENT ORDER by default (reviewing a confession out of sequence is
+    # disorienting -- each question/article builds on the previous one). The confidence
+    # badge is a visual marker only; a "priorizar" toggle in the page lets the reviewer
+    # opt into a flagged-first sort without losing the ability to switch back.
     n_alta = sum(1 for d in data_js_items if d["tier"] == "alta")
     n_revisar = sum(1 for d in data_js_items if d["tier"] == "revisar")
     n_sem = sum(1 for d in data_js_items if d["tier"] == "sem_check")
@@ -143,6 +143,8 @@ def build_html(work: str, items: list, manifest: dict, diff_by_sha: dict) -> str
   .conf-none{{background:#161b22;color:#8b949e;border:1px solid var(--bd)}}
   .diffnote{{font-size:.78rem;color:#d29922;margin-top:4px;font-style:italic}}
   .legend{{font-size:.8rem;color:var(--mut);margin-bottom:16px}}
+  .ghost-btn{{display:block;margin-top:8px;background:#21262d;color:var(--tx);border:1px solid var(--bd);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:.8rem}}
+  .ghost-btn.active{{background:var(--acc);color:#03121f;border-color:var(--acc);font-weight:600}}
   label{{display:block;font-size:.78rem;color:var(--mut);margin:10px 0 3px;text-transform:uppercase;letter-spacing:.04em}}
   textarea{{width:100%;background:#0d1117;color:var(--tx);border:1px solid var(--bd);border-radius:6px;padding:8px 10px;font:inherit;font-size:.92rem;resize:vertical}}
   .en{{min-height:70px;color:#8b949e}} .pt{{min-height:100px}}
@@ -165,7 +167,8 @@ def build_html(work: str, items: list, manifest: dict, diff_by_sha: dict) -> str
 <div class="sub">Para cada item: leia o original (EN) e a tradução (pt-BR, <b>edite se quiser</b>), veja as notas dos juízes-IA, e marque <b>Aprovar / Editado / Rejeitar</b>. No fim, baixe o JSON e envie.</div>
 <div class="sys"><b>⚠️ Dados sintéticos — leia antes de revisar:</b><br>{DISCLAIMER}</div>
 <div class="src"><b>Fonte (domínio público):</b><br>{src_line}<br><span style="opacity:.8">{src.get('url','')}</span></div>
-<div class="legend">Ordenado por prioridade de revisão — <span class="conf conf-low">⚠ revisar com atenção</span> ({n_revisar}) e <span class="conf conf-none">◌ sem checagem semântica</span> ({n_sem}) primeiro; <span class="conf conf-high">✓ alta confiança</span> ({n_alta}) por último, pode ir mais rápido. A checagem semântica compara com um texto de referência externo — é sinal de apoio, não substitui seu julgamento.</div>
+<div class="legend">Cartões na <b>ordem original do documento</b> (capítulo/pergunta em sequência). Cada um traz um selo: <span class="conf conf-low">⚠ revisar com atenção</span> ({n_revisar}) · <span class="conf conf-none">◌ sem checagem semântica</span> ({n_sem}) · <span class="conf conf-high">✓ alta confiança</span> ({n_alta}). A checagem semântica compara com um texto de referência externo — é sinal de apoio, não substitui seu julgamento.
+  <button id="toggleSort" class="ghost-btn" onclick="toggleSort()">🔀 Mostrar sinalizados primeiro</button></div>
 
 <div id="cards"></div>
 
@@ -181,14 +184,32 @@ const WORK = "{work}";
 const DATA = {data_json};
 
 const state = DATA.map(d=>({{id:d.id, sha:d.sha, status:"", en:d.en, ptbr:d.ptbr, notes:""}}));
+const TIER_RANK = {{revisar:0, sem_check:1, alta:2}};
+let prioritized = false;   // false = natural document order (default); true = flagged-first
+
+function currentOrder(){{
+  const idxs = DATA.map((d,i)=>i);   // identity = natural document order
+  if(prioritized) idxs.sort((a,b)=> TIER_RANK[DATA[a].tier]-TIER_RANK[DATA[b].tier]);
+  return idxs;
+}}
+
+function toggleSort(){{
+  prioritized = !prioritized;
+  const btn = document.getElementById("toggleSort");
+  btn.textContent = prioritized ? "📄 Voltar à ordem do documento" : "🔀 Mostrar sinalizados primeiro";
+  btn.classList.toggle("active", prioritized);
+  render();
+}}
 
 function render(){{
   const c=document.getElementById("cards"); c.innerHTML="";
-  DATA.forEach((d,i)=>{{
+  const order = currentOrder();
+  order.forEach((i, pos)=>{{
+    const d = DATA[i];
     const el=document.createElement("div"); el.className="card";
     const probsHtml = d.problems.length ? `<div class="problems">⚠ ${{d.problems.map(esc).join("<br>⚠ ")}}</div>` : "";
     const diffHtml = d.diff_notes ? `<div class="diffnote">🔍 comparação semântica: ${{esc(d.diff_notes)}}</div>` : "";
-    el.innerHTML=`<span class="idx">${{i+1}}/${{DATA.length}} · ${{d.id}}</span>
+    el.innerHTML=`<span class="idx">${{pos+1}}/${{DATA.length}} · ${{d.id}}</span>
       <span class="conf ${{d.conf_class}}">${{esc(d.conf_label)}}</span>
       <span class="tag">mediana juízes: ${{d.median}}</span>
       <label>Original (EN, domínio público)</label>
@@ -215,9 +236,9 @@ function render(){{
   paint(); upd();
 }}
 function paint(){{
-  document.querySelectorAll(".status").forEach((row,i)=>{{
+  document.querySelectorAll(".status").forEach(row=>{{
     row.querySelectorAll("button").forEach(b=>{{
-      b.className=""; const s=state[i].status;
+      b.className=""; const s=state[b.dataset.i].status;
       if(b.dataset.s===s) b.className= s==="ok"?"sel-ok":s==="edit"?"sel-edit":"sel-bad";
     }});
   }});
