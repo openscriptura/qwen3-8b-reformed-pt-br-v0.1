@@ -283,6 +283,12 @@ SEMANTIC_JUDGE_SYS = (
     '"added_claims": ["..."] (afirmações que estão na IA mas NÃO na tradicional), '
     '"notes": "..."}'
 )
+# deepseek-v4-flash sometimes reasons before emitting the JSON verdict (Lesson #18 --
+# same bug already fixed in 10_retranslate_pd.py's judge/translate steps). WCF units are
+# whole CHAPTERS (much longer than the paragraph/question-level units in other works),
+# so there's more to "reason" about -- 1024 wasn't enough (18/27 WCF pairs hit
+# finish_reason=length with empty content). Bump with headroom.
+JUDGE_MAX_TOKENS = 4096
 
 
 def translate_max_note():
@@ -367,7 +373,7 @@ def do_compare(args):
                     client, model=model,
                     messages=[{"role": "system", "content": SEMANTIC_JUDGE_SYS},
                               {"role": "user", "content": user}],
-                    temperature=0.0, max_tokens=1024, seed=42,
+                    temperature=0.0, max_tokens=JUDGE_MAX_TOKENS, seed=42,
                     log_key=f"{item['sha']}_semdiff",
                 )
                 tracker.add(api.estimate_cost_usd(resp, model))
