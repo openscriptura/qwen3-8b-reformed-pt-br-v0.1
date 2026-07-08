@@ -11,7 +11,7 @@ Modes
   --translate             segment + translate + 3-LLM judge panel (MEDIAN >= 93)
                           -> data/tier_c/tier_c_pd_translations.jsonl
                           (PAID; prints a cost estimate and does nothing unless --execute)
-                          judges: google/gemini-3.5-flash, openai/gpt-oss-120b,
+                          judges: google/gemini-3.5-flash, anthropic/claude-haiku-4.5,
                           xiaomi/mimo-v2.5 (override: env OPENROUTER_PD_JUDGES)
   --build                 (stub) hand off to scripts/merge_dataset.py
 
@@ -130,14 +130,19 @@ MIN_SCORE = 93.0  # MEDIAN of the 3-judge panel must be >= 93 (0-100)
 JUDGE_MODELS = tuple(
     m.strip() for m in os.getenv(
         "OPENROUTER_PD_JUDGES",
-        "google/gemini-3.5-flash,openai/gpt-oss-120b,xiaomi/mimo-v2.5",
+        "google/gemini-3.5-flash,anthropic/claude-haiku-4.5,xiaomi/mimo-v2.5",
     ).split(",") if m.strip()
 )
-# gpt-oss-120b and mimo-v2.5 are REASONING models: they burn ~1000 reasoning
+# anthropic/claude-haiku-4.5 and mimo-v2.5 are REASONING models: they burn ~1000 reasoning
 # tokens before emitting the JSON (observed finish_reason=length at 1024 →
 # empty/truncated content — the Lesson #18 failure mode). 4096 gives headroom;
 # billing is on actual tokens used.
 JUDGE_MAX_TOKENS = 4096
+# deepseek-v4-flash sometimes reasons on the TRANSLATE call too: 8/665 units in
+# the first full run hit finish_reason=length with reasoning_tokens=3072/3072
+# and empty content (same Lesson #18 failure mode, translator side). Bump with
+# headroom; billing is on actual tokens used.
+TRANSLATE_MAX_TOKENS = 6144
 
 
 def _unit_sha(work: str, text: str) -> str:
@@ -253,7 +258,7 @@ def translate(args):
                     client, model=model,
                     messages=[{"role": "system", "content": TRANSLATE_SYS},
                               {"role": "user", "content": u["en"]}],
-                    temperature=0.0, max_tokens=3072, seed=42,
+                    temperature=0.0, max_tokens=TRANSLATE_MAX_TOKENS, seed=42,
                     log_key=f"{u['sha']}_translate",
                 )
                 tracker.add(api.estimate_cost_usd(t_resp, model))
