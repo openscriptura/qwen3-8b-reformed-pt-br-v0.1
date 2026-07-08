@@ -288,7 +288,7 @@ SEMANTIC_JUDGE_SYS = (
 # whole CHAPTERS (much longer than the paragraph/question-level units in other works),
 # so there's more to "reason" about -- 1024 wasn't enough (18/27 WCF pairs hit
 # finish_reason=length with empty content). Bump with headroom.
-JUDGE_MAX_TOKENS = 4096
+JUDGE_MAX_TOKENS = 8192
 
 
 def translate_max_note():
