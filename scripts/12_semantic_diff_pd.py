@@ -42,9 +42,34 @@ LEGACY_FILES = {
     "heidelberg": "heidelberg_catechism.txt",
     "lcf_1689": "lcf_1689.txt",
     "dort": "canons_of_dort.txt",
+    "wcf": "wcf_1647.txt",
 }
 
-ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10}
+def _roman_to_int(s: str) -> int:
+    vals = {"I": 1, "V": 5, "X": 10, "L": 50}
+    total, prev = 0, 0
+    for ch in reversed(s.upper()):
+        v = vals.get(ch, 0)
+        total += -v if v < prev else v
+        prev = max(prev, v)
+    return total
+
+
+class _RomanDict(dict):
+    def get(self, key, default=None):
+        try:
+            return _roman_to_int(key) if key else default
+        except Exception:
+            return default
+
+    def __getitem__(self, key):
+        return _roman_to_int(key)
+
+    def __contains__(self, key):
+        return bool(key) and all(c in "IVXLivxl" for c in key)
+
+
+ROMAN = _RomanDict()  # supports any roman numeral (I..XXXIII+), not just a fixed table
 DORT_HEAD_WORD = {"FIRST": 1, "SECOND": 2, "THIRD": 3, "THIRD AND FOURTH": 3, "FOURTH": 3, "FIFTH": 5}
 
 REF_RE = re.compile(
@@ -90,17 +115,24 @@ def our_keys_by_work(work: str, units: list):
             # garbled-number headers (e.g. "QUESTION ia7.") are left unaligned on purpose
     elif work == "lcf_1689":
         # Chapter headers are often too short to survive segment()'s length filter and
-        # get silently dropped -- do NOT rely on them. Instead, detect a new chapter by
-        # the paragraph number RESETTING (each unit's own leading "N." is reliable,
-        # since that number IS the segment() cut boundary itself).
+        # get silently dropped -- do NOT rely on them. Detect a new chapter with TWO
+        # signals instead of one: (a) the paragraph number RESETTING (decreasing), or
+        # (b) the number exceeding the current chapter's known max (from the legacy
+        # file's reliable "CAPÍTULO N" headers) -- (a) alone missed a chapter whose own
+        # "1." paragraph was dropped/merged, so its numbering never visibly decreased.
+        legacy_max = {}
+        for (ch, n) in load_legacy("lcf_1689"):
+            legacy_max[ch] = max(legacy_max.get(ch, 0), n)
+        max_chapter = max(legacy_max) if legacy_max else 0
         chapter, prev_n = 0, None
         for u in sorted(units, key=lambda x: x["idx"]):
             ma = re.match(r"(\d+)\.\s", u["en"])
             if not ma:
                 continue
             n = int(ma.group(1))
-            if prev_n is None or n <= prev_n:
-                chapter += 1
+            cur_max = legacy_max.get(chapter, 0)
+            if prev_n is None or n <= prev_n or (cur_max and n > cur_max):
+                chapter = min(chapter + 1, max_chapter) if chapter else 1
             prev_n = n
             out[(chapter, n)] = u
     elif work == "dort":
@@ -115,6 +147,13 @@ def our_keys_by_work(work: str, units: list):
                 head += 1
             prev_n = n
             out[(head, n)] = u
+    elif work == "wcf":
+        # Flat, chapter-level key (our units are one-per-CHAPTER, not per-paragraph --
+        # segment() didn't split WCF further; 33 units = 33 chapters).
+        for u in units:
+            m = re.match(r"CHAPTER\s+([IVXL]+)\.", u["en"])
+            if m and m.group(1) in ROMAN:
+                out[ROMAN[m.group(1)]] = u
     return out
 
 
@@ -182,7 +221,26 @@ def load_legacy(work: str):
         return legacy_keys_nested(text, r"^CAP[ÍI]TULO\s+(\d+)", r"^(\d+)\.")
     if work == "dort":
         return legacy_keys_dort(text)
+    if work == "wcf":
+        return legacy_keys_wcf(text)
     return {}
+
+
+def legacy_keys_wcf(text: str) -> dict:
+    """Flat chapter-level key (matches our per-chapter units). The file opens with a
+    table of contents listing all 33 chapters with dot-leader page numbers
+    ('CAPÍTULO 1: ... ..................3') before the real body repeats the same
+    headers -- filter out any match followed by a run of dots within the next 200
+    chars, which only ever occurs in the TOC, never in the body text."""
+    out = {}
+    candidates = list(re.finditer(r"CAP[ÍI]TULO\s+(\d+):", text, flags=re.I))
+    matches = [m for m in candidates if not re.search(r"\.{3,}", text[m.end():m.end() + 200])]
+    for i, m in enumerate(matches):
+        n = int(m.group(1))
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        out[n] = text[start:end].strip()
+    return out
 
 
 # ---------------- deterministic Scripture-reference check ----------------
