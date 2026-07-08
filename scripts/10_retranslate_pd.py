@@ -98,7 +98,14 @@ def fetch():
 # --------------------------- segment + translate ------------------------------
 def segment(text: str):
     body = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
-    units = re.split(r"\n(?=(?:Q\.?\s*\d+|\d+\.\s|Question\s+\d+|CHAPTER|Chapter|Article|ARTICLE|Head|HEAD))", body)
+    # Two "Question" alternatives: digit-numbered (WLC/WSC: "Question 1:" or "Q. 1.")
+    # and an ALL-CAPS OCR-fallback requiring only a trailing period (Heidelberg scan:
+    # question numbers sometimes OCR'd as garbled letters, e.g. "QUESTION ia7.").
+    units = re.split(
+        r"\n(?=(?:Q\.?\s*\d+|\d+\.\s|Question\s+\d+|QUESTION\s+\S+\.|CHAPTER|Chapter|"
+        r"Article\s+\d+|ARTICLE\s+\d+|Art\.\s*[IVXLC0-9]+\.|Head|HEAD))",
+        body,
+    )
     return [u.strip() for u in units if len(u.strip()) > 40]
 
 

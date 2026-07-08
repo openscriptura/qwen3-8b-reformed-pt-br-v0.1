@@ -1,5 +1,5 @@
 {
-  "note": "Public-domain ORIGINAL sources for re-translating the confessions to pt-BR with our own AI pipeline, so Tier C becomes redistributable. HARD RULE: translate ONLY from these PD originals — never from a copyrighted modern PT edition. Heidelberg + Canons of Dort are sourced from the PD 'Three Forms of Unity' scan (OCR — needs split+cleaning). See docs/PD_RETRANSLATION_SPEC.md.",
+  "note": "Public-domain ORIGINAL sources for re-translating the confessions to pt-BR with our own AI pipeline, so Tier C becomes redistributable. HARD RULE: translate ONLY from these PD originals — never from a copyrighted modern PT edition. See docs/PD_RETRANSLATION_SPEC.md.",
   "items": [
     {
       "id": "wsc", "title": "Westminster Shorter Catechism (1647)", "lang": "en",
@@ -20,21 +20,36 @@
       "license": "public domain (1677/1689 original text)", "status": "clean"
     },
     {
-      "id": "three_forms_of_unity", "title": "Three Forms of Unity (Heidelberg Catechism 1563, Belgic Confession, Canons of Dort 1619)", "lang": "en",
+      "id": "heidelberg", "title": "Heidelberg Catechism (1563) — Tercentenary Edition (1863)", "lang": "en",
+      "url": "https://archive.org/details/HeidelbergCatechismTextOfTercentenaryEdition",
+      "source": "Internet Archive (Google Books scan, explicitly public domain)", "format": "text-preextracted",
+      "license": "public domain (pre-1929 US publication)",
+      "status": "clean",
+      "note": "Manually fetched + cleaned 2026-07-08 (stripped Google Books scan watermarks/library stamps, fixed 3 OCR-garbled question numbers). 112/129 question headers recognized cleanly; ~17 questions have OCR-garbled header digits and are merged into a neighboring translation unit by segment() — no content lost, just coarser chunking. File: data/sources/confessions_pd/heidelberg.pd.txt (89,093 chars, 115 translation units)."
+    },
+    {
+      "id": "dort", "title": "Canons of the Synod of Dort (1618–1619) — positive articles, Four Heads of Doctrine", "lang": "en",
+      "url": "https://ccel.org/s/schaff/creeds3/cache/creeds3.txt",
+      "source": "Philip Schaff, Creeds of Christendom Vol. III (1877), CCEL cache — clean scholarly digitization, NOT an OCR scan", "format": "text-preextracted",
+      "license": "public domain (Schaff 1877 compilation; English text from the RCA Constitution, 19th c.)",
+      "status": "clean",
+      "note": "Manually extracted + de-indented 2026-07-08. ABRIDGED form: positive articles of all Four Heads of Doctrine only (58 articles) — omits Preface, Conclusion, formal Rejection of Errors, and the Sentence against the Remonstrants, per Schaff's own editorial note (documented upstream, not a cleaning defect). File: data/sources/confessions_pd/dort.pd.txt (38,991 chars, 59 translation units)."
+    },
+    {
+      "id": "three_forms_of_unity", "title": "Three Forms of Unity (superseded — OCR scan, 57.8% translation-QA approval)", "lang": "en",
       "url": "https://archive.org/download/threeformsofunit00slmi/threeformsofunit00slmi_djvu.txt",
       "source": "Internet Archive (PD scan)", "format": "text",
       "license": "public domain (old PD English edition; NOT the modern URCNA/RCUS translation)",
-      "status": "ocr-needs-split-clean",
-      "contains": ["heidelberg", "dort", "belgic (unused)"]
+      "status": "superseded",
+      "superseded_by": ["heidelberg", "dort"],
+      "note": "First full run (665 units) showed this source's OCR noise drove ~42% translation-QA rejection (vs 6–13% for the clean Wikisource sources). Replaced by the 'heidelberg' and 'dort' entries above (clean, non-OCR or lightly-cleaned sources). Kept here for provenance/audit only — do not re-run against this id."
     },
     {
       "id": "wcf", "title": "Westminster Confession of Faith (1646)", "lang": "en",
       "url": "https://www.ccel.org/ccel/schaff/creeds3.toc.html",
-      "source": "Schaff, Creeds of Christendom Vol. III (CCEL) — or an Internet Archive PD scan",
-      "format": "html",
-      "license": "public domain (Schaff 1877 + 1646 original)",
-      "status": "pending-source",
-      "todo": "drop a clean PD WCF text into data/sources/confessions_pd/wcf.pd.txt (Schaff Vol.III or archive.org). Wikisource 'Westminster Confession of Faith' is a versions/disambiguation page."
+      "source": "Schaff, Creeds of Christendom, Vol. III (CCEL)", "format": "html",
+      "license": "public domain (Schaff 1877 compilation + 1646 original)", "status": "pending-source",
+      "todo": "drop a clean PD WCF text into data/sources/confessions_pd/wcf.pd.txt (Schaff Vol.III or archive.org). Wikisource 'Westminster Confession of Faith' is a versions/disambiguation page. NOTE: creeds3.txt (already fetched for Dort) may also contain the WCF text — worth checking before a fresh source search."
     }
   ]
 }
