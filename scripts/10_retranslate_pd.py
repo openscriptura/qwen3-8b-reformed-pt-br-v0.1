@@ -5,6 +5,18 @@ no third-party copyright). See docs/PD_RETRANSLATION_SPEC.md.
 HARD RULE: translate ONLY from the PD originals in configs/pd_sources.json —
 never from a copyrighted modern PT edition.
 
+AUTHORSHIP DISCLOSURE (publish-critical — read before shipping this data anywhere):
+we do NOT author, own, or hold copyright over the translated text produced here.
+Every output record is: (1) a MACHINE TRANSLATION (LLM, not human) of a work we
+verified to be in the PUBLIC DOMAIN, (2) quality-scored by a panel of MACHINE
+judges (also not human). This is SYNTHETIC DATA — do not represent it as a human,
+scholarly, or denominational translation, and do not claim authorship/copyright
+over it beyond "we generated this translation" (the underlying content is PD; the
+translation act itself, being AI-generated, is not asserted as our copyrighted
+work either). Each record carries this disclaimer + full source provenance
+(source_title/source_url/source_license) inline — see docs/PD_RETRANSLATION_SPEC.md
+"Authorship & Publication Disclosure".
+
 Modes
   --fetch                 download PD sources (free HTTP), clean, save to
                           data/sources/confessions_pd/{id}.pd.txt   [no API spend]
@@ -228,6 +240,20 @@ def translate(args):
     if not api_key:
         sys.exit("OPENROUTER_API_KEY not set (env or .env).")
 
+    # Per-work source metadata (title/url/license), for a self-describing provenance
+    # block on EVERY record — must survive even if this file is filtered/exported
+    # alone, since it is what makes the HF publication non-infringing (see the
+    # "Authorship & Publication Disclosure" note below and docs/PD_RETRANSLATION_SPEC.md).
+    manifest_by_id = {it["id"]: it for it in json.loads(MANIFEST.read_text(encoding="utf-8"))["items"]}
+    AUTHORSHIP_DISCLAIMER = (
+        "SYNTHETIC DATA — NOT a human translation and NOT an original human-authored work. "
+        "This record's 'ptbr' text is a MACHINE (LLM) TRANSLATION of a public-domain English "
+        "source (see source_title/source_url/source_license below), quality-checked by LLM "
+        "judges (also machine, not human). We claim NO human authorship or copyright over the "
+        "translation; it is derived entirely from a public-domain original. Publish/attribute "
+        "accordingly — do not represent this as a human or scholarly translation."
+    )
+
     raw_dir = PROJECT_ROOT / "logs" / "raw" / "pd_retranslate"   # full audit trail per call
     api = OpenRouterClient(api_key=api_key, base_url=base_url, log_raw_dir=raw_dir)
     tracker = CostTracker(limit_usd=args.cost_limit)
@@ -255,11 +281,16 @@ def translate(args):
 
     async def process(client, u):
         async with sem:
+            src = manifest_by_id.get(u["work"], {})
             rec = {"work": u["work"], "idx": u["idx"], "sha": u["sha"], "en": u["en"],
                    "ptbr": None, "scores": [], "score_final": None, "approved": False,
                    "translator_model": model, "judge_models": list(JUDGE_MODELS),
                    "aggregation": f"median >= {MIN_SCORE:.0f}",
-                   "license": "PD original (see configs/pd_sources.json)", "ai_translated": True}
+                   "ai_translated": True, "data_nature": "synthetic (AI-generated translation)",
+                   "authorship_disclaimer": AUTHORSHIP_DISCLAIMER,
+                   "source_title": src.get("title"), "source_url": src.get("url"),
+                   "source_publisher": src.get("source"), "source_license": src.get("license"),
+                   "license": src.get("license", "PD original (see configs/pd_sources.json)")}
             try:
                 t_resp = await api.chat(
                     client, model=model,

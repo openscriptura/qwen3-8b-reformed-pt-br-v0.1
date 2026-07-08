@@ -1,5 +1,6 @@
 {
   "note": "Public-domain ORIGINAL sources for re-translating the confessions to pt-BR with our own AI pipeline, so Tier C becomes redistributable. HARD RULE: translate ONLY from these PD originals — never from a copyrighted modern PT edition. See docs/PD_RETRANSLATION_SPEC.md.",
+  "authorship_disclosure": "The resulting pt-BR translations are SYNTHETIC DATA: machine (LLM) translations of these public-domain originals, quality-scored by machine (LLM) judges — not human/scholarly/denominational translations. We claim no copyright or human authorship over the translation itself, only that we produced it via an AI pipeline; each generated record carries this disclaimer + this source's title/url/license inline (see scripts/10_retranslate_pd.py). See docs/PD_RETRANSLATION_SPEC.md § 'Authorship & Publication Disclosure'.",
   "items": [
     {
       "id": "wsc", "title": "Westminster Shorter Catechism (1647)", "lang": "en",
