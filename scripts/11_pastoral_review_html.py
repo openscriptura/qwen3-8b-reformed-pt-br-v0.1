@@ -20,6 +20,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRANSLATIONS = PROJECT_ROOT / "data" / "tier_c" / "tier_c_pd_translations.jsonl"
+SEMANTIC_DIFF = PROJECT_ROOT / "data" / "tier_c" / "semantic_diff_pd.jsonl"
 MANIFEST = PROJECT_ROOT / "configs" / "pd_sources.json"
 OUT_DIR = PROJECT_ROOT / "data" / "tier_c"
 
@@ -51,7 +52,36 @@ def load_latest():
     return latest
 
 
-def build_html(work: str, items: list, manifest: dict) -> str:
+def load_semantic_diff():
+    """sha -> semantic-diff record (latest per sha), or {} if the tool hasn't been run."""
+    if not SEMANTIC_DIFF.exists():
+        return {}
+    latest = {}
+    for line in SEMANTIC_DIFF.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        latest[r["sha"]] = r
+    return latest
+
+
+def confidence_tier(sha: str, diff_by_sha: dict):
+    """-> (tier, label, css_class). Cross-checks the semantic-diff comparison against
+    the independent legacy PT reference (see scripts/12_semantic_diff_pd.py) — a 2nd,
+    independent signal on top of the translate-QA judge panel. Not a doctrinal
+    authority; used only to prioritize where a human reviewer should slow down."""
+    d = diff_by_sha.get(sha)
+    if not d or d.get("core_claim_match") is None:
+        return ("sem_check", "◌ sem checagem semântica (só juízes de tradução)", "conf-none")
+    score = d["core_claim_match"]
+    if score == 0:
+        return ("sem_check", "◌ comparação não alinhou (fora do escopo desta checagem)", "conf-none")
+    if score >= 90:
+        return ("alta", f"✓ alta confiança (equivalência semântica {score:.0f}/100)", "conf-high")
+    return ("revisar", f"⚠ revisar com atenção (equivalência semântica {score:.0f}/100)", "conf-low")
+
+
+def build_html(work: str, items: list, manifest: dict, diff_by_sha: dict) -> str:
     src = manifest.get(work, {})
     title = WORK_TITLES.get(work, work)
     src_line = f"{src.get('title', '')} — {src.get('source', '')} ({src.get('license', '')})"
@@ -67,6 +97,9 @@ def build_html(work: str, items: list, manifest: dict) -> str:
             det = d.get("detail") or {}
             for p in (det.get("problemas") or []):
                 problems.append(f"[{(d.get('judge') or '?').split('/')[-1]}] {p}")
+        tier, conf_label, conf_class = confidence_tier(r["sha"], diff_by_sha)
+        diff = diff_by_sha.get(r["sha"]) or {}
+        diff_notes = diff.get("notes") if tier == "revisar" else None
         data_js_items.append({
             "id": f"{work}-{r['idx']:03d}",
             "sha": r["sha"],
@@ -75,7 +108,19 @@ def build_html(work: str, items: list, manifest: dict) -> str:
             "median": r.get("score_final"),
             "scores_summary": scores_html,
             "problems": problems,
+            "tier": tier,
+            "conf_label": conf_label,
+            "conf_class": conf_class,
+            "diff_notes": diff_notes,
         })
+
+    # Prioritize what needs a careful human look: flagged first, then unchecked, then
+    # high-confidence last (fast pass) — operationalizes the review-speed recommendation.
+    tier_order = {"revisar": 0, "sem_check": 1, "alta": 2}
+    data_js_items.sort(key=lambda d: tier_order[d["tier"]])
+    n_alta = sum(1 for d in data_js_items if d["tier"] == "alta")
+    n_revisar = sum(1 for d in data_js_items if d["tier"] == "revisar")
+    n_sem = sum(1 for d in data_js_items if d["tier"] == "sem_check")
 
     data_json = json.dumps(data_js_items, ensure_ascii=False)
 
@@ -92,6 +137,12 @@ def build_html(work: str, items: list, manifest: dict) -> str:
   .src{{background:#0b1f17;border:1px solid #1f6f3f;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#9fdcb6;margin-bottom:20px}}
   .card{{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin-bottom:18px}}
   .tag{{display:inline-block;font-size:.72rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-bottom:8px;background:#1c2b3a;color:#79c0ff}}
+  .conf{{display:inline-block;font-size:.72rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-bottom:8px;margin-right:6px}}
+  .conf-high{{background:#0b1f17;color:#3fb950;border:1px solid #1f6f3f}}
+  .conf-low{{background:#2b1c0a;color:#d29922;border:1px solid #6f5320}}
+  .conf-none{{background:#161b22;color:#8b949e;border:1px solid var(--bd)}}
+  .diffnote{{font-size:.78rem;color:#d29922;margin-top:4px;font-style:italic}}
+  .legend{{font-size:.8rem;color:var(--mut);margin-bottom:16px}}
   label{{display:block;font-size:.78rem;color:var(--mut);margin:10px 0 3px;text-transform:uppercase;letter-spacing:.04em}}
   textarea{{width:100%;background:#0d1117;color:var(--tx);border:1px solid var(--bd);border-radius:6px;padding:8px 10px;font:inherit;font-size:.92rem;resize:vertical}}
   .en{{min-height:70px;color:#8b949e}} .pt{{min-height:100px}}
@@ -114,6 +165,7 @@ def build_html(work: str, items: list, manifest: dict) -> str:
 <div class="sub">Para cada item: leia o original (EN) e a tradução (pt-BR, <b>edite se quiser</b>), veja as notas dos juízes-IA, e marque <b>Aprovar / Editado / Rejeitar</b>. No fim, baixe o JSON e envie.</div>
 <div class="sys"><b>⚠️ Dados sintéticos — leia antes de revisar:</b><br>{DISCLAIMER}</div>
 <div class="src"><b>Fonte (domínio público):</b><br>{src_line}<br><span style="opacity:.8">{src.get('url','')}</span></div>
+<div class="legend">Ordenado por prioridade de revisão — <span class="conf conf-low">⚠ revisar com atenção</span> ({n_revisar}) e <span class="conf conf-none">◌ sem checagem semântica</span> ({n_sem}) primeiro; <span class="conf conf-high">✓ alta confiança</span> ({n_alta}) por último, pode ir mais rápido. A checagem semântica compara com um texto de referência externo — é sinal de apoio, não substitui seu julgamento.</div>
 
 <div id="cards"></div>
 
@@ -135,7 +187,9 @@ function render(){{
   DATA.forEach((d,i)=>{{
     const el=document.createElement("div"); el.className="card";
     const probsHtml = d.problems.length ? `<div class="problems">⚠ ${{d.problems.map(esc).join("<br>⚠ ")}}</div>` : "";
+    const diffHtml = d.diff_notes ? `<div class="diffnote">🔍 comparação semântica: ${{esc(d.diff_notes)}}</div>` : "";
     el.innerHTML=`<span class="idx">${{i+1}}/${{DATA.length}} · ${{d.id}}</span>
+      <span class="conf ${{d.conf_class}}">${{esc(d.conf_label)}}</span>
       <span class="tag">mediana juízes: ${{d.median}}</span>
       <label>Original (EN, domínio público)</label>
       <textarea class="en" data-i="${{i}}" data-f="en" readonly>${{esc(state[i].en)}}</textarea>
@@ -143,6 +197,7 @@ function render(){{
       <textarea class="pt" data-i="${{i}}" data-f="ptbr">${{esc(state[i].ptbr)}}</textarea>
       <div class="judges">Juízes: ${{esc(d.scores_summary)}}</div>
       ${{probsHtml}}
+      ${{diffHtml}}
       <div class="status">
         <button data-i="${{i}}" data-s="ok">✅ Aprovar</button>
         <button data-i="${{i}}" data-s="edit">✏️ Editado</button>
@@ -208,6 +263,11 @@ def main():
     manifest = {it["id"]: it for it in json.loads(MANIFEST.read_text(encoding="utf-8"))["items"]}
     active_works = {k for k, v in manifest.items() if v.get("status") != "superseded"}
     latest = load_latest()
+    diff_by_sha = load_semantic_diff()
+    if diff_by_sha:
+        print(f"(usando checagem semântica: {len(diff_by_sha)} pares em {SEMANTIC_DIFF.name})")
+    else:
+        print("(sem semantic_diff_pd.jsonl -- badges de confiança não disponíveis; rode scripts/12_semantic_diff_pd.py primeiro)")
 
     by_work = {}
     for r in latest.values():
@@ -224,7 +284,7 @@ def main():
         if not items:
             print(f"  (skip {w}: no approved units)")
             continue
-        html = build_html(w, items, manifest)
+        html = build_html(w, items, manifest, diff_by_sha)
         out = OUT_DIR / f"review_pd_{w}.html"
         out.write_text(html, encoding="utf-8")
         print(f"  {w:12} {len(items):4} approved units -> {out}")
