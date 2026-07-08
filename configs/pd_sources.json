@@ -47,10 +47,12 @@
     },
     {
       "id": "wcf", "title": "Westminster Confession of Faith (1646)", "lang": "en",
-      "url": "https://www.ccel.org/ccel/schaff/creeds3.toc.html",
-      "source": "Schaff, Creeds of Christendom, Vol. III (CCEL)", "format": "html",
-      "license": "public domain (Schaff 1877 compilation + 1646 original)", "status": "pending-source",
-      "todo": "drop a clean PD WCF text into data/sources/confessions_pd/wcf.pd.txt (Schaff Vol.III or archive.org). Wikisource 'Westminster Confession of Faith' is a versions/disambiguation page. NOTE: creeds3.txt (already fetched for Dort) may also contain the WCF text — worth checking before a fresh source search."
+      "url": "https://en.wikisource.org/wiki/The_Confession_of_Faith_of_the_Assembly_of_Divines_at_Westminster",
+      "source": "Wikisource, 'The Confession of Faith of the Assembly of Divines at Westminster' — 1946 transcription (ed. S.W. Carruthers) of the 1646 manuscript; community-validated ('Validated texts' category), NOT an OCR scan",
+      "format": "rendered-html-preextracted",
+      "license": "public domain (Wikisource PD-old tag: work predates 1931 / author-100-years rule)",
+      "status": "clean",
+      "note": "Resolved 2026-07-08 — the Schaff Vol. III / CCEL source (previously 'pending') turned out to be a parallel English/Latin two-column edition whose plain-text export INTERLEAVES the two languages line-by-line, corrupting the English text (rejected). The original 1647 first-printing scan (archive.org 'humbleadviceofas00west') uses period long-s typography that OCR mangles worse than the already-deprecated three_forms_of_unity source (also rejected). This Wikisource transcription is clean, community-proofread, and explicitly PD-tagged. Extracted from the RENDERED article (not raw wikitext, which only contains an unresolved <pages> transclusion) — see the extraction note in docs/PD_RETRANSLATION_SPEC.md history. All 33 chapters present and verified (Chapter XXI — 'Of Religious Worship, and the Sabbath Day' — independently confirms the WCF 21.2 citation already used in configs/system_prompt_production.txt). File: data/sources/confessions_pd/wcf.pd.txt (69,652 chars, 33 translation units)."
     }
   ]
 }
